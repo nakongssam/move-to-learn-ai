@@ -3,7 +3,7 @@
 //   SHEET_API: Apps Script '웹 앱 URL' (apps-script/Code.gs 참고)
 //   비워 두면 시트 전송·순위표 없이 게임만 동작해요.
 // =====================================================================
-export const SHEET_API = "";
+export const SHEET_API = "https://script.google.com/macros/s/AKfycbxmwye-vpfDqGb0OdicDET0fRvC28WaHLOWSgsU-c5R0yEb6tLFL-xAp5MMBUS5E00Uwg/exec";
 
 export function sendToSheet(payload) {
   if (!SHEET_API) return;
