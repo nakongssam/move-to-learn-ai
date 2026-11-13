@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>과일 베기: 내가 퍼셉트론!</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  과일 베기: 내가 퍼셉트론!  (웹 버전)
+  정보 교과: 인공지능 — 결정 경계, 선형 분류, 퍼셉트론 학습, XOR, 다층 신경망
+  AI융합교육대학원 박사과정 김한나
+
+  - 설치 없이 브라우저에서 실행 (GitHub Pages 등 https 주소에 올리면 됨)
+  - 손 인식: Google MediaPipe Hand Landmarker (웹 버전, 영상은 이 컴퓨터 안에서만 처리)
+  - 입력 방식: 손(웹캠) / 마우스·터치  → 연구 비교 조건으로 사용 가능 (기록에 condition으로 저장)
+  - 기록: 'CSV 저장' 버튼으로 내려받기.  Supabase 설정 시 자동 업로드(아래 SUPABASE_* 참고)
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0e12; overflow: hidden;
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); display: block; touch-action: none; }
+  #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(10, 10, 14, .94); color: #fff; z-index: 10; }
+  .box { background: #1d1d24; border: 1px solid #444; border-radius: 20px; padding: 34px 44px;
+    width: min(520px, 88vw); text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .box h1 { margin: 0 0 4px; font-size: 34px; }
+  .box .sub { margin: 0 0 22px; color: #ffd73c; }
+  .box label { display: block; text-align: left; margin: 14px 0 6px; color: #bbb; font-size: 14px; }
+  .box input, .box select { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: 10px;
+    border: 1px solid #555; background: #111; color: #fff; font-size: 16px; font-family: inherit; }
+  .box button { margin-top: 22px; width: 100%; padding: 13px; border: 0; border-radius: 12px;
+    background: #8c5ae6; color: #fff; font-size: 18px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .box button:disabled { opacity: .5; cursor: wait; }
+  #status { min-height: 22px; margin: 14px 0 0; color: #46d2ff; font-size: 14px; }
+  .tip { color: #888; font-size: 12.5px; line-height: 1.6; margin: 12px 0 0; }
+  #tools { position: fixed; right: 12px; bottom: 10px; z-index: 5; display: flex; gap: 8px; }
+  #tools button { padding: 7px 12px; border-radius: 9px; border: 1px solid #555; background: rgba(20,20,26,.85);
+    color: #ddd; font-size: 13px; cursor: pointer; font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="1280" height="720"></canvas></div>
+<video id="v" playsinline muted style="display:none"></video>
+
+<div id="start">
+  <div class="box">
+    <h1>🍎 과일 베기</h1>
+    <p class="sub">내가 퍼셉트론! — 결정 경계로 배우는 인공지능</p>
+    <label for="name">이름 또는 번호</label>
+    <input id="name" placeholder="예: 10101 홍길동" autocomplete="off">
+    <label for="mode">입력 방식</label>
+    <select id="mode">
+      <option value="hand">손 (웹캠) — 검지를 빠르게 휘둘러 베기</option>
+      <option value="mouse">마우스·터치 — 드래그해서 베기</option>
+    </select>
+    <button id="go">시작하기</button>
+    <p id="status"></p>
+    <p class="tip">웹캠 모드는 카메라 권한을 허용해야 해요.<br>영상은 이 컴퓨터 안에서만 처리되고 어디에도 전송되지 않아요.</p>
+  </div>
+</div>
+<div id="tools"><button id="csv">기록 CSV 저장</button></div>
+
+<script type="module">
+// =====================================================================
+// 설정
+// =====================================================================
+const MP_VER = "0.10.14";
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+// (선택) Supabase에 기록 자동 저장 — 비워 두면 사용 안 함
+//   테이블 예시 SQL:
+//   create table fruit_log (id bigint generated always as identity primary key, time text, player text,
+//     condition text, stage text, wave int, mode text, accuracy real, n_fruits int, line text, line2 text,
+//     slash_time_s real, learning_rate real);
+//   (anon 사용자에게 insert 권한을 주는 RLS 정책 필요)
+const SUPABASE_URL = "";   // 예: "https://abcd1234.supabase.co"
+const SUPABASE_KEY = "";   // anon public key
+const SUPABASE_TABLE = "fruit_log";
+
+const W = 1280, H = 720;
+const STAGES = [
+  { name: "1단계", title: "과일을 갈라라!", kind: "sep", waves: 3, n: 36, drift: 0.05 },
+  { name: "2단계", title: "뒤섞인 데이터", kind: "noisy", waves: 3, n: 40, drift: 0.07 },
+  { name: "3단계", title: "나 vs 컴퓨터", kind: "light", waves: 1, n: 40, drift: 0.04 },
+  { name: "보스", title: "XOR 과일 그릇", kind: "xor", waves: 1, n: 40, drift: 0.03 },
+];
+const WAVE_TIME = 12, WAVE2_TIME = 18;
+const SLASH_START_SPEED = 1300, SLASH_END_SPEED = 450, SLASH_MIN_LEN = 220, SLASH_COOLDOWN = 0.5;
+const STEPS_PER_SEC = 30, MAX_EPOCHS = 6;
+const RANKS = [[0, "견습생"], [300, "과일 칼잡이"], [700, "데이터 닌자"], [1100, "AI 닌자"]];
+const HAND_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const C = { WHITE: "#ffffff", GRAY: "#b4b4b4", CYAN: "#46d2ff", GREEN: "#3cd278", GOLD: "#ffd73c",
+  ORANGE: "#ffaa28", APPLE: "#e63c3c", BERRY: "#326ec8", RED: "#ff5a5a", PURPLE: "#8c5ae6" };
+const FONT = '"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",sans-serif';
+const INSIGHT = [
+  ["내가 벤 선은 하나의 식이에요:   w1·x + w2·y + b = 0", "Q. 선을 기울이면 어떤 숫자가 바뀔까?  평행하게 옮기면?"],
+  ["Q. 100%가 안 된 건 내 탓일까, 데이터 탓일까?", "좋은 분류기는 '완벽한 선'이 아니라 '가장 좋은 선'을 찾아요."],
+  ["Q. 컴퓨터는 아무렇게나 그은 선에서 시작했어요.", "   무엇을 보고 선을 고쳤을까요?  (힌트: 틀린 과일)"],
+  ["XOR은 선 하나로는 절대 못 나눠요 — 사람도, 퍼셉트론도.", "선 두 개 + 조합 = 은닉층 = 신경망!"],
+];
+const INTRO = {
+  sep: [["식탁 위에 사과와 블루베리가 놓여 있어요.", C.WHITE], ["한 번에 베어서 둘을 갈라 보세요.", C.WHITE],
+        ["내가 벤 선 = 결정 경계(decision boundary)", C.GOLD]],
+  noisy: [["이번엔 데이터가 뒤섞였어요. 엉뚱한 쪽에 있는 과일도 있어요.", C.WHITE],
+          ["그래도 '가장 좋은 선'을 찾을 수 있을까요?", C.GOLD]],
+  light: [["먼저 내가 베고, 같은 과일로 컴퓨터가 학습해요.", C.WHITE],
+          ["컴퓨터가 선을 한 단계씩 고쳐 가는 모습을 지켜보세요.", C.WHITE],
+          ["컴퓨터를 이길 수 있을까요?", C.GOLD], ["(+ / - 키: 컴퓨터의 학습률 바꾸기)", C.GRAY]],
+  xor: [["마지막 과일 그릇! 사과와 블루베리가 대각선으로 놓여 있어요.", C.WHITE],
+        ["한 번에 갈라 보세요… 할 수 있다면요.", C.WHITE], ["생각해 보기: 직선 하나로 가능할까?", C.GOLD]],
+};
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+// =====================================================================
+// 그리기 도우미
+// =====================================================================
+function rrPath(x1, y1, x2, y2, r) {
+  r = Math.max(0, Math.min(r, (x2 - x1) / 2, (y2 - y1) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x1 + r, y1); ctx.arcTo(x2, y1, x2, y2, r); ctx.arcTo(x2, y2, x1, y2, r);
+  ctx.arcTo(x1, y2, x1, y1, r); ctx.arcTo(x1, y1, x2, y1, r); ctx.closePath();
+}
+function panel(x1, y1, x2, y2, { fill = "rgba(26,24,28,0.62)", r = 16, stroke = "rgba(120,120,120,0.8)", lw = 1 } = {}) {
+  rrPath(x1, y1, x2, y2, r);
+  ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+function text(s, x, y, { size = 24, color = C.WHITE, bold = false, align = "center", base = "middle", shadow = true } = {}) {
+  ctx.font = `${bold ? 700 : 400} ${size}px ${FONT}`;
+  ctx.textAlign = align; ctx.textBaseline = base;
+  if (shadow) { ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillText(s, x + 2, y + 2); }
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function circle(x, y, r, fill, stroke, lw = 1) {
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+function seg(a, b, color, lw) {
+  ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = "round"; ctx.stroke();
+}
+function drawFruit(p, label, r = 17) {
+  const [x, y] = p;
+  if (label > 0) {           // 사과
+    circle(x, y, r, C.APPLE);
+    circle(x - r / 3, y - r / 3, r / 4, "rgba(255,190,190,0.9)");
+    seg([x, y - r], [x + 2, y - r - 7], "#6e4628", 3);
+    ctx.beginPath(); ctx.ellipse(x + 7, y - r - 4, 7, 3, -Math.PI / 6, 0, Math.PI * 2);
+    ctx.fillStyle = "#3cb43c"; ctx.fill();
+  } else {                   // 블루베리 (꼭지 별로 모양도 구분)
+    circle(x, y, r - 1, C.BERRY);
+    circle(x - r / 3, y - r / 3, r / 4, "rgba(170,200,245,0.9)");
+    for (let a = 0; a < 5; a++) {
+      const ang = a * 2 * Math.PI / 5 - Math.PI / 2;
+      seg([x, y - r + 6], [x + 5 * Math.cos(ang), y - r + 6 + 5 * Math.sin(ang)], "#142850", 2);
+    }
+  }
+  circle(x, y, r, null, C.WHITE, 1);
+}
+function drawX(p, s = 13) {
+  const [x, y] = p;
+  circle(x, y, s + 10, null, "#ff4040", 3);
+  seg([x - s, y - s], [x + s, y + s], C.WHITE, 4);
+  seg([x - s, y + s], [x + s, y - s], C.WHITE, 4);
+}
+
+// =====================================================================
+// 데이터 / 결정 경계 수학
+// =====================================================================
+function gauss() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+class Fruit {
+  constructor(x, y, label, drift) {
+    this.x = x; this.y = y; this.label = label;
+    const ang = Math.random() * 2 * Math.PI, sp = (0.4 + Math.random() * 0.6) * drift;
+    this.vx = sp * Math.cos(ang); this.vy = sp * Math.sin(ang);
+  }
+  move(dt) {
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    if (Math.abs(this.x) > 0.95) { this.vx *= -1; this.x = clamp(this.x, -0.95, 0.95); }
+    if (Math.abs(this.y) > 0.92) { this.vy *= -1; this.y = clamp(this.y, -0.92, 0.92); }
+  }
+}
+
+function genData(kind, n, drift) {
+  const data = [];
+  if (kind === "xor") {
+    const per = Math.floor(n / 4);
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (let i = 0; i < per; i++)
+      data.push([sx * 0.5 + gauss() * 0.13, sy * 0.5 + gauss() * 0.13, sx * sy]);
+  } else {
+    const dist = { sep: 0.5, noisy: 0.28, light: 0.33 }[kind];
+    const sd = { sep: 0.16, noisy: 0.24, light: 0.2 }[kind];
+    const flip = { sep: 0, noisy: 0.08, light: 0.05 }[kind];
+    const th = Math.random() * 2 * Math.PI, cx = dist * Math.cos(th), cy = dist * Math.sin(th);
+    for (let i = 0; i < n; i++) {
+      let lab = i < n / 2 ? 1 : -1;
+      const x = lab * cx + gauss() * sd, y = lab * cy + gauss() * sd;
+      if (Math.random() < flip) lab = -lab;
+      data.push([x, y, lab]);
+    }
+  }
+  return data.map(([x, y, l]) => new Fruit(clamp(x, -0.92, 0.92), clamp(y, -0.9, 0.9), l, drift));
+}
+
+const predict = (w, x, y) => (w[0] * x + w[1] * y + w[2] >= 0 ? 1 : -1);
+const accuracy = (w, fr) => fr.filter(f => predict(w, f.x, f.y) === f.label).length / fr.length;
+function lineFromPoints(p1, p2) {
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  let n1 = dy, n2 = -dx; const nn = Math.hypot(n1, n2) || 1;
+  n1 /= nn; n2 /= nn;
+  return [n1, n2, -(n1 * p1[0] + n2 * p1[1])];
+}
+function orient(w, fr) {   // 선의 어느 쪽을 '사과'로 볼지: 더 잘 맞는 방향
+  const a = accuracy(w, fr);
+  return a >= 0.5 ? [w, a] : [w.map(v => -v), 1 - a];
+}
+function doubleRegions(w1, w2, fr) {  // 두 선이 만든 영역마다 다수결 (= 은닉층 2 + 출력 조합)
+  const counts = new Map();
+  for (const f of fr) {
+    const k = predict(w1, f.x, f.y) + "," + predict(w2, f.x, f.y);
+    if (!counts.has(k)) counts.set(k, [0, 0]);
+    counts.get(k)[f.label > 0 ? 0 : 1]++;
+  }
+  const map = new Map(); let correct = 0;
+  for (const [k, c] of counts) { map.set(k, c[0] >= c[1] ? 1 : -1); correct += Math.max(c[0], c[1]); }
+  return { map, acc: correct / fr.length };
+}
+function fmtW(w) {
+  const nn = Math.hypot(w[0], w[1]) || 1;
+  const f = v => (v >= 0 ? "+" : "−") + Math.abs(v / nn).toFixed(2);
+  return `${f(w[0])}x ${f(w[1])}y ${f(w[2])} = 0`;
+}
+
+class Perceptron {
+  // 데이터를 하나씩 보고, 틀리면 w ← w + lr·y·x 로 선을 조금 옮김.
+  // 노이즈가 있으면 계속 흔들리므로 '지금까지 가장 좋았던 선'(pocket)을 따로 기억.
+  constructor(fr, lr) {
+    this.X = fr.map(f => [f.x, f.y, 1]); this.y = fr.map(f => f.label); this.lr = lr;
+    const ang = Math.random() * 2 * Math.PI;
+    this.w = [Math.cos(ang) * 0.5, Math.sin(ang) * 0.5, (Math.random() * 1.2 - 0.6) * 0.5];
+    this.order = this.X.map((_, i) => i); this.shuffle();
+    this.i = 0; this.epoch = 1; this.steps = 0; this.updates = 0; this.epochUpdates = 0;
+    this.cur = null; this.updated = false; this.done = false;
+    this.acc = this.score(this.w); this.bestW = [...this.w]; this.bestAcc = this.acc;
+  }
+  shuffle() { for (let i = this.order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [this.order[i], this.order[j]] = [this.order[j], this.order[i]]; } }
+  dot(w, x) { return w[0] * x[0] + w[1] * x[1] + w[2] * x[2]; }
+  score(w) { let c = 0; this.X.forEach((x, k) => { if ((this.dot(w, x) >= 0 ? 1 : -1) === this.y[k]) c++; }); return c / this.X.length; }
+  step() {
+    if (this.done) return;
+    const k = this.order[this.i]; this.cur = k;
+    const pred = this.dot(this.w, this.X[k]) >= 0 ? 1 : -1;
+    this.updated = pred !== this.y[k];
+    if (this.updated) {
+      this.w = this.w.map((v, d) => v + this.lr * this.y[k] * this.X[k][d]);
+      this.updates++; this.epochUpdates++;
+      this.acc = this.score(this.w);
+      if (this.acc > this.bestAcc) { this.bestW = [...this.w]; this.bestAcc = this.acc; }
+    }
+    this.steps++; this.i++;
+    if (this.i >= this.order.length) {
+      if (this.epochUpdates === 0 || this.epoch >= MAX_EPOCHS) { this.done = true; return; }
+      this.i = 0; this.epochUpdates = 0; this.epoch++; this.shuffle();
+    }
+  }
+}
+
+// =====================================================================
+// 베기 인식 (손끝 속도로 판단)
+// =====================================================================
+class SlashDetector {
+  constructor() { this.hist = []; this.active = false; this.path = []; this.lastEnd = -1e9; this.tStart = 0; }
+  reset() { this.hist = []; this.active = false; this.path = []; }
+  update(p, now) {
+    this.hist.push([now, p]);
+    while (this.hist.length && now - this.hist[0][0] > 0.5) this.hist.shift();
+    const ref = this.hist.find(([t]) => now - t <= 0.07);
+    const speed = (!ref || now - ref[0] < 1e-3) ? 0 : Math.hypot(p[0] - ref[1][0], p[1] - ref[1][1]) / (now - ref[0]);
+    if (!this.active) {
+      if (speed > SLASH_START_SPEED && now - this.lastEnd > SLASH_COOLDOWN) {
+        this.active = true;
+        const st = this.hist.filter(([t]) => now - t <= 0.12).map(([, q]) => q);
+        this.path = st.length ? st : [p]; this.tStart = now;
+      }
+      return null;
+    }
+    this.path.push(p);
+    if (speed < SLASH_END_SPEED || now - this.tStart > 0.7) {
+      this.active = false; this.lastEnd = now;
+      const a = this.path[0], b = this.path[this.path.length - 1]; this.path = [];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= SLASH_MIN_LEN) return [a, b];
+    }
+    return null;
+  }
+  trail(now) { return this.hist.filter(([t]) => now - t <= 0.15).map(([, q]) => q); }
+}
+
+// =====================================================================
+// 게임
+// =====================================================================
+const S = { INTRO: 1, AIM: 2, JUDGE: 3, MACHINE: 4, COMPARE: 5, UNLOCK: 6, AIM2: 7, JUDGE2: 8, STAGE_END: 9, FINAL: 10 };
+const rankOf = xp => { let n = RANKS[0][1]; for (const [need, nm] of RANKS) if (xp >= need) n = nm; return n; };
+const FIELD = [60, 140, W - 60, H - 40];
+const toPx = (x, y) => [FIELD[0] + (x + 1) / 2 * (FIELD[2] - FIELD[0]), FIELD[1] + (1 - y) / 2 * (FIELD[3] - FIELD[1])];
+const toNorm = p => [(p[0] - FIELD[0]) / (FIELD[2] - FIELD[0]) * 2 - 1, 1 - (p[1] - FIELD[1]) / (FIELD[3] - FIELD[1]) * 2];
+
+class Game {
+  constructor(player, condition, now) {
+    this.player = player; this.condition = condition;
+    this.xp = 0; this.badges = []; this.stageIdx = 0; this.lr = 0.1; this.logs = [];
+    this.startStage(now);
+  }
+  get st() { return STAGES[this.stageIdx]; }
+  setState(s, now) { this.state = s; this.tState = now; }
+  startStage(now) {
+    this.wave = 0; this.accs = []; this.stageXp = 0; this.newBadges = [];
+    this.fruits = []; this.machine = null; this.userW = null; this.userAcc = 0; this.slashes = [];
+    this.dAcc = 0; this.wD1 = null; this.wD2 = null; this.dMap = new Map();
+    this.setState(S.INTRO, now);
+  }
+  startWave(now) {
+    this.wave++;
+    this.fruits = genData(this.st.kind, this.st.n, this.st.drift);
+    this.userW = null; this.userAcc = 0; this.slashes = []; this.tWave = now;
+    this.setState(S.AIM, now);
+  }
+  gain(x) { this.xp += x; this.stageXp += x; }
+  badge(n) { if (!this.badges.includes(n)) { this.badges.push(n); this.newBadges.push(n); } }
+  afterJudge(now) {
+    const k = this.st.kind;
+    if (k === "light" || k === "xor") { this.machine = new Perceptron(this.fruits, this.lr); this.machineAcc = 0; this.setState(S.MACHINE, now); }
+    else if (this.wave < this.st.waves) this.startWave(now);
+    else this.endStage(now);
+  }
+  endStage(now) {
+    const k = this.st.kind, avg = this.accs.reduce((a, b) => a + b, 0) / Math.max(1, this.accs.length);
+    if (k === "sep" && this.accs.some(a => a >= 0.999)) this.badge("예리한 칼날");
+    if (k === "noisy" && avg >= 0.85) this.badge("데이터 해석가");
+    this.setState(S.STAGE_END, now);
+  }
+  nextStage(now) {
+    if (this.stageIdx < STAGES.length - 1) { this.stageIdx++; this.startStage(now); }
+    else this.setState(S.FINAL, now);
+  }
+  canContinue(now) { return now - this.tState > 0.8; }
+  onSlash(a, b, now) {
+    if (this.state === S.AIM) this.judgeSingle(a, b, now);
+    else if (this.state === S.AIM2) { this.slashes.push([a, b]); if (this.slashes.length >= 2) this.judgeDouble(now); }
+    else if (this.canContinue(now)) this.advance(now);
+  }
+  advance(now) {   // SPACE, 클릭, 아무 곳이나 베기 → 다음으로
+    switch (this.state) {
+      case S.INTRO: this.startWave(now); break;
+      case S.JUDGE: this.afterJudge(now); break;
+      case S.MACHINE: while (!this.machine.done) this.machine.step(); break;
+      case S.COMPARE: this.endStage(now); break;
+      case S.UNLOCK: this.slashes = []; this.tWave = now; this.setState(S.AIM2, now); break;
+      case S.JUDGE2: this.endStage(now); break;
+      case S.STAGE_END: this.nextStage(now); break;
+    }
+  }
+  onKey(key, now) {
+    if (key === " ") { if (this.state !== S.AIM && this.state !== S.AIM2 && this.state !== S.FINAL) this.advance(now); }
+    else if (key === "r" || key === "R") {
+      if (this.state === S.FINAL) { this.xp = 0; this.badges = []; this.stageIdx = 0; }
+      this.startStage(now);
+    }
+    else if (key === "+" || key === "=") this.lr = Math.min(1, +(this.lr * 2).toFixed(4));
+    else if (key === "-" || key === "_") this.lr = Math.max(0.0125, +(this.lr / 2).toFixed(4));
+  }
+  judgeSingle(a, b, now) {
+    [this.userW, this.userAcc] = orient(lineFromPoints(toNorm(a), toNorm(b)), this.fruits);
+    this.userTime = now - this.tWave;
+    this.accs.push(this.userAcc); this.gain(Math.round(this.userAcc * 100));
+    this.log("single", this.userAcc, this.userW, this.userTime);
+    this.setState(S.JUDGE, now);
+  }
+  judgeDouble(now) {
+    const [[a1, b1], [a2, b2]] = this.slashes;
+    this.wD1 = lineFromPoints(toNorm(a1), toNorm(b1));
+    this.wD2 = lineFromPoints(toNorm(a2), toNorm(b2));
+    const r = doubleRegions(this.wD1, this.wD2, this.fruits); this.dMap = r.map; this.dAcc = r.acc;
+    this.gain(Math.round(this.dAcc * 100));
+    if (this.dAcc >= 0.9) { this.gain(300); this.badge("XOR 파괴자"); }
+    this.log("double", this.dAcc, this.wD1, now - this.tWave, this.wD2);
+    this.setState(S.JUDGE2, now);
+  }
+  timeout(now) {
+    if (this.state === S.AIM) {
+      this.userW = null; this.userAcc = 0; this.accs.push(0);
+      this.log("timeout", 0, null, WAVE_TIME); this.setState(S.JUDGE, now);
+    } else if (this.state === S.AIM2) {
+      if (this.slashes.length === 1) { this.slashes.push(this.slashes[0]); this.judgeDouble(now); }
+      else { this.dAcc = 0; this.wD1 = this.wD2 = null; this.dMap = new Map(); this.log("timeout2", 0, null, WAVE2_TIME); this.setState(S.JUDGE2, now); }
+    }
+  }
+  update(dt, now) {
+    if (this.state === S.AIM || this.state === S.AIM2) {
+      for (const f of this.fruits) f.move(dt);
+      if (now - this.tWave > (this.state === S.AIM ? WAVE_TIME : WAVE2_TIME)) this.timeout(now);
+    } else if (this.state === S.JUDGE && now - this.tState > 3.5) this.afterJudge(now);
+    else if (this.state === S.MACHINE) {
+      const m = this.machine;
+      if (!m.done) {
+        this.machineAcc += dt;
+        const steps = Math.floor(this.machineAcc * STEPS_PER_SEC);
+        this.machineAcc -= steps / STEPS_PER_SEC;
+        for (let i = 0; i < steps; i++) m.step();
+        this.tState = now;
+      } else if (now - this.tState > 1.8) this.finishMachine(now);
+    }
+  }
+  finishMachine(now) {
+    const m = this.machine;
+    this.log("machine", m.bestAcc, m.bestW, null);
+    if (this.st.kind === "light") {
+      if (this.userAcc >= m.bestAcc - 1e-9) { this.gain(150); this.badge("기계를 이긴 자"); }
+      this.setState(S.COMPARE, now);
+    } else this.setState(S.UNLOCK, now);
+  }
+  log(mode, acc, w, t, w2 = null) {
+    const row = {
+      time: new Date().toLocaleString("sv-SE"), player: this.player, condition: this.condition,
+      stage: this.st.name, wave: this.wave, mode, accuracy: +acc.toFixed(3), n_fruits: this.fruits.length,
+      line: w ? fmtW(w) : "", line2: w2 ? fmtW(w2) : "",
+      slash_time_s: t == null ? null : +t.toFixed(2), learning_rate: mode === "machine" ? this.lr : null,
+    };
+    this.logs.push(row);
+    if (SUPABASE_URL && SUPABASE_KEY) {
+      fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
+                   "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify(row),
+      }).catch(e => console.warn("Supabase 저장 실패", e));
+    }
+  }
+}
+
+// =====================================================================
+// 화면 그리기
+// =====================================================================
+function linePx(w) {
+  const [a, b, c] = w, pts = [];
+  for (const x of [-1, 1]) if (Math.abs(b) > 1e-9) { const y = -(a * x + c) / b; if (y >= -1 && y <= 1) pts.push([x, y]); }
+  for (const y of [-1, 1]) if (Math.abs(a) > 1e-9) { const x = -(b * y + c) / a; if (x >= -1 && x <= 1) pts.push([x, y]); }
+  if (pts.length < 2) return null;
+  let best = null, bd = -1;
+  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+    const d = Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]);
+    if (d > bd) { bd = d; best = [pts[i], pts[j]]; }
+  }
+  return [toPx(...best[0]), toPx(...best[1])];
+}
+function drawLine(w, color, thick = 4, label = null, pos = 0.5) {
+  const s = linePx(w); if (!s) return;
+  seg(s[0], s[1], "rgba(0,0,0,0.85)", thick + 4);
+  seg(s[0], s[1], color, thick);
+  if (label) {
+    const mx = s[0][0] + (s[1][0] - s[0][0]) * pos, my = s[0][1] + (s[1][1] - s[0][1]) * pos;
+    panel(mx - 85, my - 19, mx + 85, my + 19, { fill: "rgba(26,24,28,0.85)", r: 12, stroke: color });
+    text(label, mx, my, { size: 19, color, bold: true, shadow: false });
+  }
+}
+const side = (w, x, y) => (w[0] * x + w[1] * y + w[2] >= 0 ? 1 : -1);
+const shadeCanvas = document.createElement("canvas");
+function shadeRegions(labelFn) {   // 경계로 나뉜 영역을 사과/블루베리 색으로 옅게 칠함
+  const [x1, y1, x2, y2] = FIELD, k = 4;
+  const gw = Math.floor((x2 - x1) / k), gh = Math.floor((y2 - y1) / k);
+  shadeCanvas.width = gw; shadeCanvas.height = gh;
+  const sctx = shadeCanvas.getContext("2d"), img = sctx.createImageData(gw, gh);
+  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+    const X = -1 + 2 * i / (gw - 1), Y = 1 - 2 * j / (gh - 1), o = (j * gw + i) * 4;
+    const ap = labelFn(X, Y) > 0;
+    img.data[o] = ap ? 230 : 50; img.data[o + 1] = ap ? 60 : 110; img.data[o + 2] = ap ? 60 : 200; img.data[o + 3] = 72;
+  }
+  sctx.putImageData(img, 0, 0);
+  ctx.save(); ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(shadeCanvas, x1, y1, x2 - x1, y2 - y1); ctx.restore();
+}
+function drawFruits(g, markWrong = null) {
+  for (const f of g.fruits) {
+    const p = toPx(f.x, f.y);
+    drawFruit(p, f.label);
+    if (markWrong && markWrong(f)) drawX(p);
+  }
+}
+function drawHud(g, now) {
+  panel(20, 12, W - 20, 120);
+  const st = g.st;
+  text(st.name, 45, 50, { size: 30, bold: true, align: "left", color: st.kind === "xor" ? C.ORANGE : C.GOLD });
+  text(st.title, 45, 90, { size: 21, align: "left" });
+  const cx = W / 2;
+  if (g.state === S.AIM || g.state === S.AIM2) {
+    const lim = g.state === S.AIM ? WAVE_TIME : WAVE2_TIME, rem = Math.max(0, lim - (now - g.tWave));
+    text(`웨이브 ${g.wave}/${st.waves}   ${rem.toFixed(1)}초`, cx, 40, { size: 22 });
+    const bx1 = cx - 230, bx2 = cx + 230;
+    panel(bx1, 66, bx2, 80, { fill: "#464646", r: 7, stroke: null });
+    panel(bx1, 66, bx1 + Math.max(14, (bx2 - bx1) * rem / lim), 80, { fill: rem < 4 ? C.ORANGE : C.CYAN, r: 7, stroke: null });
+    const msg = g.state === S.AIM ? "한 번 베어서 사과와 블루베리를 갈라 보세요!" : `두 번 베기:  ${2 - g.slashes.length}번 더 베세요`;
+    text(msg, cx, 102, { size: 17, color: C.GRAY });
+  } else text(`웨이브 ${Math.max(g.wave, 1)}/${st.waves}`, cx, 50, { size: 22 });
+  text(`XP ${g.xp}`, W - 300, 50, { size: 30, bold: true, align: "left", color: C.GOLD });
+  text(`${rankOf(g.xp)}   배지 ${g.badges.length}개`, W - 300, 82, { size: 17, align: "left", color: C.GRAY });
+  drawFruit([W - 290, 106], 1, 7); text("사과", W - 278, 106, { size: 14, align: "left", color: C.GRAY, shadow: false });
+  drawFruit([W - 215, 106], -1, 7); text("블루베리", W - 203, 106, { size: 14, align: "left", color: C.GRAY, shadow: false });
+  text(g.condition === "hand" ? "입력: 손(웹캠)" : "입력: 마우스·터치", W - 70, 106, { size: 13, color: "#888", shadow: false });
+}
+function drawCard(title, lines, color = C.GOLD, foot = "아무 곳이나 베거나 클릭 / SPACE 를 누르면 계속", yTop = 170, yBot = H - 60) {
+  ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, W, H);
+  panel(170, yTop, W - 170, yBot, { fill: "rgba(26,24,28,0.94)", r: 24 });
+  text(title, W / 2, yTop + 50, { size: 40, bold: true, color });
+  lines.forEach(([s, c], i) => text(s, W / 2, yTop + 115 + i * 40, { size: 22, color: c }));
+  if (foot) text(foot, W / 2, yBot - 35, { size: 20, color: C.CYAN });
+}
+function drawNN(cx, cy) {
+  const L = [[cx - 220, cy - 40, "x"], [cx - 220, cy + 40, "y"]];
+  const Hn = [[cx, cy - 55, "베기 1"], [cx, cy + 55, "베기 2"]];
+  const O = [cx + 220, cy, "사과?"];
+  for (const a of L) for (const b of Hn) seg(a, b, C.GRAY, 2);
+  for (const b of Hn) seg(b, O, C.GRAY, 2);
+  for (const [n, col] of [...L.map(n => [n, C.CYAN]), ...Hn.map(n => [n, C.GOLD]), [O, C.GREEN]]) {
+    circle(n[0], n[1], 26, "#1e1c22", col, 3);
+    text(n[2], n[0], n[1] + 44, { size: 16, color: col, shadow: false });
+  }
+  text("입력층", cx - 220, cy - 95, { size: 16, color: C.GRAY, shadow: false });
+  text("은닉층", cx, cy - 110, { size: 16, color: C.GRAY, shadow: false });
+  text("출력층", cx + 220, cy - 55, { size: 16, color: C.GRAY, shadow: false });
+}
+function render(g, now) {
+  const [x1, y1, x2, y2] = FIELD, s = g.state;
+  panel(x1, y1, x2, y2, { fill: "rgba(20,18,18,0.45)", r: 18, stroke: "rgba(80,80,80,0.9)" });
+
+  if (s === S.AIM || s === S.AIM2 || s === S.INTRO) {
+    drawFruits(g);
+    if (s === S.AIM2) for (const [a, b] of g.slashes) drawLine(lineFromPoints(toNorm(a), toNorm(b)), C.GOLD, 4, "베기 1");
+  } else if (s === S.JUDGE) {
+    if (g.userW) {
+      const uw = g.userW;
+      shadeRegions((X, Y) => side(uw, X, Y));
+      drawFruits(g, f => predict(uw, f.x, f.y) !== f.label);
+      drawLine(uw, C.CYAN, 5);
+      const col = g.userAcc >= 0.9 ? C.GREEN : g.userAcc >= 0.7 ? C.ORANGE : C.RED;
+      text(`${Math.round(g.userAcc * 100)}%`, W / 2, y1 + 60, { size: 70, bold: true, color: col });
+      text(`내 선:  ${fmtW(uw)}`, W / 2, y1 + 115, { size: 22 });
+      const wrong = g.fruits.filter(f => predict(uw, f.x, f.y) !== f.label).length;
+      text(`반대편에 있는 과일 ${wrong}개  (X 표시)`, W / 2, y2 - 30, { size: 20, color: C.GRAY });
+    } else { drawFruits(g); text("시간 초과!  0%", W / 2, y1 + 60, { size: 56, bold: true, color: C.RED }); }
+  } else if (s === S.MACHINE) {
+    const m = g.machine, mw = m.w;
+    shadeRegions((X, Y) => side(mw, X, Y));
+    drawFruits(g);
+    if (g.userW) drawLine(g.userW, "#787878", 2);
+    drawLine(mw, C.GOLD, 5);
+    if (m.cur !== null) { const f = g.fruits[m.cur]; const p = toPx(f.x, f.y); circle(p[0], p[1], 28, null, m.updated ? C.RED : C.GREEN, 4); }
+    panel(x1 + 20, y1 + 15, x1 + 600, y1 + 165, { fill: "rgba(26,24,28,0.88)", r: 14, stroke: C.GOLD });
+    text("컴퓨터가 학습 중 (퍼셉트론)", x1 + 40, y1 + 44, { size: 22, bold: true, align: "left", color: C.GOLD });
+    text(`반복 ${m.epoch}회차   살펴본 수 ${m.steps}   고친 수 ${m.updates}   정확도 ${Math.round(m.acc * 100)}%`, x1 + 40, y1 + 78, { size: 18, align: "left" });
+    text(`선: ${fmtW(mw)}`, x1 + 40, y1 + 108, { size: 18, align: "left" });
+    text(`틀리면:  w ← w + lr × y × x     (학습률 lr = ${g.lr})`, x1 + 40, y1 + 140, { size: 17, align: "left", color: m.updated ? C.RED : C.GRAY });
+    if (m.done) text(m.bestAcc >= 0.999 ? "학습 완료!" : "계속 흔들리기만 해요… 더 나아지지 않아요!", W / 2, y2 - 30, { size: 24, bold: true, color: C.GOLD });
+    else text("빨간 원 = 틀린 과일 → 선이 움직여요.    SPACE: 건너뛰기", W / 2, y2 - 30, { size: 18, color: C.GRAY });
+  } else if (s === S.COMPARE) {
+    const m = g.machine;
+    drawFruits(g);
+    if (g.userW) drawLine(g.userW, C.CYAN, 4, `나 ${Math.round(g.userAcc * 100)}%`, 0.25);
+    drawLine(m.bestW, C.GOLD, 4, `컴퓨터 ${Math.round(m.bestAcc * 100)}%`, 0.75);
+    const win = g.userAcc >= m.bestAcc - 1e-9;
+    text(win ? "내가 이겼다!" : "컴퓨터 승리!", W / 2, y1 + 55, { size: 50, bold: true, color: win ? C.CYAN : C.GOLD });
+    text(`나: 한 번에 베기     컴퓨터: ${m.steps}번 살펴보고 ${m.updates}번 고침`, W / 2, y1 + 105, { size: 21 });
+    text("아무 곳이나 베거나 클릭 / SPACE 를 누르면 계속", W / 2, y2 - 30, { size: 19, color: C.CYAN });
+  } else if (s === S.UNLOCK) {
+    drawFruits(g);
+    const m = g.machine;
+    drawCard("두 번 베기 해금!", [
+      [`나의 최고: ${Math.round(g.userAcc * 100)}%     퍼셉트론 최고: ${Math.round(m.bestAcc * 100)}%`, C.WHITE],
+      ["이 XOR 배치는 직선 하나로는 절대 나눌 수 없어요.", C.WHITE],
+      ["이제 두 번 벨 수 있어요.  베기 한 번 = 뉴런 하나!", C.GOLD],
+      ["두 선이 만든 영역마다 사과인지 블루베리인지 정해요.", C.WHITE]], C.ORANGE);
+  } else if (s === S.JUDGE2) {
+    if (g.wD1) {
+      const w1 = g.wD1, w2 = g.wD2, mp = g.dMap;
+      const lab = (X, Y) => mp.get(side(w1, X, Y) + "," + side(w2, X, Y)) ?? -1;
+      shadeRegions(lab);
+      drawFruits(g, f => lab(f.x, f.y) !== f.label);
+      drawLine(w1, C.GOLD, 4, "뉴런 1", 0.25);
+      drawLine(w2, C.GOLD, 4, "뉴런 2", 0.62);
+    } else drawFruits(g);
+    text(`${Math.round(g.dAcc * 100)}%`, W / 2, y1 + 60, { size: 70, bold: true, color: g.dAcc >= 0.9 ? C.GREEN : C.ORANGE });
+    text("선 두 개 + 영역 조합 = 신경망!", W / 2, y1 + 115, { size: 24 });
+    text("아무 곳이나 베거나 클릭 / SPACE 를 누르면 계속", W / 2, y2 - 30, { size: 19, color: C.CYAN });
+  }
+
+  drawHud(g, now);
+
+  if (s === S.INTRO) {
+    const st = g.st;
+    drawCard(`${st.name}:  ${st.title}`, INTRO[st.kind], st.kind === "xor" ? C.ORANGE : C.GOLD, undefined, 170, H - 160);
+  } else if (s === S.STAGE_END) {
+    const st = g.st, avg = g.accs.reduce((a, b) => a + b, 0) / Math.max(1, g.accs.length);
+    const lines = [[`내 정확도: ${g.accs.map(a => Math.round(a * 100) + "%").join("  ")}     (평균 ${Math.round(avg * 100)}%)`, C.WHITE]];
+    if (st.kind === "light" && g.machine) lines.push([`컴퓨터(퍼셉트론) 최고: ${Math.round(g.machine.bestAcc * 100)}%`, C.WHITE]);
+    if (st.kind === "xor") lines.push([`두 번 베기: ${Math.round(g.dAcc * 100)}%`, C.WHITE]);
+    lines.push([`+${g.stageXp} XP    (누적 ${g.xp} / ${rankOf(g.xp)})`, C.GOLD], ["", C.WHITE]);
+    for (const t of INSIGHT[g.stageIdx]) lines.push([t, C.CYAN]);
+    if (g.newBadges.length) lines.push(["새 배지:  " + g.newBadges.join("  /  "), C.GOLD]);
+    drawCard(`${st.name} 완료!`, lines, C.GOLD, "베거나 클릭 / SPACE: 다음 단계      R: 이 단계 다시");
+  } else if (s === S.FINAL) {
+    drawCard("모든 단계 완료!", [
+      [`XP ${g.xp}  /  ${rankOf(g.xp)}     배지: ${g.badges.join(", ") || "-"}`, C.GOLD],
+      ["오늘 내가 발견한 것", C.WHITE]], C.GOLD, "R: 처음부터 다시      'CSV 저장' 버튼으로 기록 내려받기", 150, H - 30);
+    drawNN(W / 2, 465);
+    text("선 1개 = 뉴런 1개(퍼셉트론).   뉴런을 층으로 쌓으면 = 신경망", W / 2, 600, { size: 21, color: C.CYAN });
+  }
+}
+function drawTrail(pts, active) {
+  for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i], active ? "#ffffff" : "#c8e6ff", Math.max(1, 10 * i / pts.length));
+}
+function drawHand(pts) {
+  for (const [a, b] of HAND_CONN) seg(pts[a], pts[b], "rgba(180,210,230,0.8)", 1.5);
+  circle(pts[8][0], pts[8][1], 10, null, C.CYAN, 2);
+  circle(pts[8][0], pts[8][1], 4, C.WHITE);
+}
+
+// =====================================================================
+// 실행: 카메라, 손 인식, 입력, 루프
+// =====================================================================
+const video = document.getElementById("v");
+let game = null, condition = "mouse", landmarker = null, hand = null, lastVideoTime = -1, prev = null;
+const slasher = new SlashDetector();
+const ptr = { down: false, start: null, path: [], pending: null };
+
+function canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height];
+}
+canvas.addEventListener("pointerdown", e => { const p = canvasPoint(e); ptr.down = true; ptr.start = p; ptr.path = [p]; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointermove", e => { if (ptr.down) { ptr.path.push(canvasPoint(e)); ptr.path = ptr.path.slice(-14); } });
+canvas.addEventListener("pointerup", e => {
+  if (!ptr.down) return;
+  ptr.down = false;
+  const b = canvasPoint(e), a = ptr.start;
+  ptr.pending = Math.hypot(b[0] - a[0], b[1] - a[1]) >= SLASH_MIN_LEN ? [a, b] : "click";
+  ptr.path = [];
+});
+window.addEventListener("keydown", e => {
+  if (!game) return;
+  if (e.key === " ") e.preventDefault();
+  game.onKey(e.key, performance.now() / 1000);
+});
+
+function loop() {
+  const now = performance.now() / 1000;
+  const dt = prev === null ? 0 : Math.min(0.1, now - prev); prev = now;
+
+  // 배경: 웹캠(거울 모드) 또는 단색
+  if (condition === "hand" && video.readyState >= 2) {
+    ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, W, H); ctx.restore();
+    ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fillRect(0, 0, W, H);
+    if (landmarker && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const res = landmarker.detectForVideo(video, performance.now());
+      hand = res.landmarks && res.landmarks.length ? res.landmarks[0].map(l => [(1 - l.x) * W, l.y * H]) : null;
+      if (hand && game) { const sl = slasher.update(hand[8], now); if (sl) game.onSlash(sl[0], sl[1], now); }
+      else slasher.reset();
+    }
+  } else {
+    const gr = ctx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "#2a2f3a"); gr.addColorStop(1, "#14161c");
+    ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+  }
+
+  if (game) {
+    if (ptr.pending) {
+      const pd = ptr.pending; ptr.pending = null;
+      if (pd === "click") { if (game.state !== S.AIM && game.state !== S.AIM2 && game.canContinue(now)) game.advance(now); }
+      else game.onSlash(pd[0], pd[1], now);
+    }
+    game.update(dt, now);
+    render(game, now);
+    if (hand) { drawHand(hand); drawTrail(slasher.trail(now), slasher.active); }
+    if (ptr.down) drawTrail(ptr.path, true);
+  }
+  requestAnimationFrame(loop);
+}
+
+async function setupHand(status) {
+  status("카메라를 켜는 중… (권한을 허용해 주세요)");
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" }, audio: false });
+  video.srcObject = stream; await video.play();
+  status("손 인식 모델을 불러오는 중… (처음엔 10초 정도 걸릴 수 있어요)");
+  const { HandLandmarker, FilesetResolver } = await import(`${MP_URL}/vision_bundle.mjs`);
+  const fileset = await FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+  const opts = d => ({ baseOptions: { modelAssetPath: MODEL_URL, delegate: d }, runningMode: "VIDEO", numHands: 1,
+    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+  try { landmarker = await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
+  catch { landmarker = await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
+}
+
+document.getElementById("go").addEventListener("click", async () => {
+  const btn = document.getElementById("go"), st = document.getElementById("status");
+  const status = m => (st.textContent = m);
+  const player = document.getElementById("name").value.trim() || "guest";
+  condition = document.getElementById("mode").value;
+  btn.disabled = true;
+  if (condition === "hand") {
+    try { await setupHand(status); }
+    catch (e) {
+      console.error(e);
+      status("웹캠이나 손 인식을 시작하지 못했어요. https 주소인지, 카메라 권한을 허용했는지 확인하세요. (마우스 방식은 바로 가능)");
+      btn.disabled = false; return;
+    }
+  }
+  document.getElementById("start").style.display = "none";
+  game = new Game(player, condition, performance.now() / 1000);
+});
+
+document.getElementById("csv").addEventListener("click", () => {
+  if (!game || !game.logs.length) { alert("아직 저장할 기록이 없어요."); return; }
+  const cols = Object.keys(game.logs[0]);
+  const esc = v => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const csv = "﻿" + [cols.join(","), ...game.logs.map(r => cols.map(c => esc(r[c])).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `fruit_log_${game.player}_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+});
+
+// 테스트·디버그용 접근 (브라우저 콘솔에서 사용 가능)
+window.__fruit = { get game() { return game; }, S, toPx, linePx, orient, doubleRegions, genData, Perceptron, accuracy };
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
