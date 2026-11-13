@@ -24,7 +24,7 @@ function doPost(e) {
     if (d.kind === 'score') {
       appendRow_(ss, 'scores', {
         time: new Date(), game: d.game, room: d.room, nickname: d.nickname,
-        player: d.player, condition: d.condition, stage: d.stage, xp: d.xp,
+        student_id: d.student_id, name: d.name, condition: d.condition, stage: d.stage, xp: d.xp,
       });
     } else {
       appendRow_(ss, String(d.game || 'game') + '_log', d.row || {});

@@ -46,8 +46,12 @@
   <div class="box">
     <h1>🖐 이웃에게 물어봐</h1>
     <p class="sub">k-최근접 이웃(k-NN) — 손가락 수가 곧 k!</p>
-    <label for="name">학번·이름 <span style="color:#999">(기록용 — 순위표에는 안 보여요)</span></label>
-    <input id="name" placeholder="예: 10701 홍길동" autocomplete="off">
+    <div style="display:flex;gap:10px">
+      <div style="width:150px"><label for="sid">학번</label>
+        <input id="sid" placeholder="예: 10701" maxlength="10" inputmode="numeric" autocomplete="off"></div>
+      <div style="flex:1"><label for="name">이름 <span style="color:#999">(기록용 — 순위표엔 안 보여요)</span></label>
+        <input id="name" placeholder="예: 홍길동" maxlength="20" autocomplete="off"></div>
+    </div>
     <div style="display:flex;gap:10px">
       <div style="flex:1"><label for="nick">닉네임 <span style="color:#999">(순위표에 표시)</span></label>
         <input id="nick" placeholder="예: 사과킬러" maxlength="12" autocomplete="off"></div>
@@ -242,7 +246,8 @@ class Game {
     this.state = s; this.tState = now;
     if (s === S.STAGE_END || s === S.FINAL)   // 단계가 끝날 때마다 순위표용 누적 XP 전송
       sendToSheet({ kind: "score", game: GAME_ID, room: this.room || "", nickname: this.nickname || this.player,
-                    player: this.player, condition: this.condition, stage: this.st.name, xp: this.xp });
+                    player: this.player, student_id: this.studentId || "", name: this.studentName || "",
+                    condition: this.condition, stage: this.st.name, xp: this.xp });
   }
   gain(x) { this.xp += x; this.stageXp += x; }
   badge(n) { if (!this.badges.includes(n)) { this.badges.push(n); this.newBadges.push(n); } }
@@ -362,7 +367,7 @@ class Game {
     else if (this.canContinue(now)) this.advance(now);
   }
   log(event, data) {
-    const row = { time: new Date().toLocaleString("sv-SE"), player: this.player, condition: this.condition,
+    const row = { time: new Date().toLocaleString("sv-SE"), student_id: this.studentId || "", name: this.studentName || "", condition: this.condition,
       stage: this.st.name, event, detail: JSON.stringify(data) };
     this.logs.push(row);
     sendToSheet({ kind: "log", game: GAME_ID, row: { ...row, nickname: this.nickname || "", room: this.room || "" } });
@@ -600,10 +605,12 @@ async function setupHand(status) {
 document.getElementById("go").addEventListener("click", async () => {
   const btn = document.getElementById("go"), st = document.getElementById("status");
   const status = m => (st.textContent = m);
-  const player = document.getElementById("name").value.trim() || "guest";
+  const studentId = document.getElementById("sid").value.trim();
+  const studentName = document.getElementById("name").value.trim();
+  const player = [studentId, studentName].filter(Boolean).join(" ") || "guest";
   const nickname = document.getElementById("nick").value.trim() || player;
   const room = document.getElementById("room").value.trim();
-  try { localStorage.setItem("mtl_info", JSON.stringify({ player, nickname, room })); } catch {}
+  try { localStorage.setItem("mtl_info", JSON.stringify({ studentId, studentName, nickname, room })); } catch {}
   condition = document.getElementById("mode").value;
   btn.disabled = true;
   if (condition === "hand") {
@@ -612,7 +619,7 @@ document.getElementById("go").addEventListener("click", async () => {
   }
   document.getElementById("start").style.display = "none";
   game = new Game(player, condition, performance.now() / 1000);
-  game.nickname = nickname; game.room = room;
+  game.nickname = nickname; game.room = room; game.studentId = studentId; game.studentName = studentName;
 });
 document.getElementById("csv").addEventListener("click", () => {
   if (!game || !game.logs.length) { alert("아직 저장할 기록이 없어요."); return; }
@@ -626,7 +633,8 @@ document.getElementById("csv").addEventListener("click", () => {
 window.__knn = { get game() { return game; }, S, knn, countFingers, toPx };
 // 지난번 입력값 채워 두기
 try { const s = JSON.parse(localStorage.getItem("mtl_info") || "{}");
-  if (s.player) document.getElementById("name").value = s.player;
+  if (s.studentId) document.getElementById("sid").value = s.studentId;
+  if (s.studentName) document.getElementById("name").value = s.studentName;
   if (s.nickname) document.getElementById("nick").value = s.nickname;
   if (s.room) document.getElementById("room").value = s.room; } catch {}
 setupLeaderboard(GAME_ID, () => ({ room: game ? game.room : document.getElementById("room").value.trim(),
