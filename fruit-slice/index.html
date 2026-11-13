@@ -15,27 +15,27 @@
   - 기록: 'CSV 저장' 버튼으로 내려받기.  Supabase 설정 시 자동 업로드(아래 SUPABASE_* 참고)
 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #0e0e12; overflow: hidden;
+  html, body { margin: 0; height: 100%; background: #eef1f6; overflow: hidden;
     font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
   #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
   canvas { width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); display: block; touch-action: none; }
   #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(10, 10, 14, .94); color: #fff; z-index: 10; }
-  .box { background: #1d1d24; border: 1px solid #444; border-radius: 20px; padding: 34px 44px;
-    width: min(520px, 88vw); text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+    background: rgba(238, 241, 246, .97); color: #22222a; z-index: 10; }
+  .box { background: #ffffff; border: 1px solid #dde1ea; border-radius: 20px; padding: 34px 44px;
+    width: min(520px, 88vw); text-align: center; box-shadow: 0 10px 40px rgba(40,50,80,.15); }
   .box h1 { margin: 0 0 4px; font-size: 34px; }
-  .box .sub { margin: 0 0 22px; color: #ffd73c; }
-  .box label { display: block; text-align: left; margin: 14px 0 6px; color: #bbb; font-size: 14px; }
+  .box .sub { margin: 0 0 22px; color: #7a4fd6; }
+  .box label { display: block; text-align: left; margin: 14px 0 6px; color: #666; font-size: 14px; }
   .box input, .box select { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: 10px;
-    border: 1px solid #555; background: #111; color: #fff; font-size: 16px; font-family: inherit; }
+    border: 1px solid #cfd4de; background: #fff; color: #22222a; font-size: 16px; font-family: inherit; }
   .box button { margin-top: 22px; width: 100%; padding: 13px; border: 0; border-radius: 12px;
-    background: #8c5ae6; color: #fff; font-size: 18px; font-weight: 700; cursor: pointer; font-family: inherit; }
+    background: #7a4fd6; color: #fff; font-size: 18px; font-weight: 700; cursor: pointer; font-family: inherit; }
   .box button:disabled { opacity: .5; cursor: wait; }
-  #status { min-height: 22px; margin: 14px 0 0; color: #46d2ff; font-size: 14px; }
+  #status { min-height: 22px; margin: 14px 0 0; color: #0b8fcf; font-size: 14px; }
   .tip { color: #888; font-size: 12.5px; line-height: 1.6; margin: 12px 0 0; }
   #tools { position: fixed; right: 12px; bottom: 10px; z-index: 5; display: flex; gap: 8px; }
-  #tools button { padding: 7px 12px; border-radius: 9px; border: 1px solid #555; background: rgba(20,20,26,.85);
-    color: #ddd; font-size: 13px; cursor: pointer; font-family: inherit; }
+  #tools button { padding: 7px 12px; border-radius: 9px; border: 1px solid #cfd4de; background: rgba(255,255,255,.92);
+    color: #333; font-size: 13px; cursor: pointer; font-family: inherit; }
 </style>
 </head>
 <body>
@@ -91,8 +91,8 @@ const STEPS_PER_SEC = 30, MAX_EPOCHS = 6;
 const RANKS = [[0, "견습생"], [300, "과일 칼잡이"], [700, "데이터 닌자"], [1100, "AI 닌자"]];
 const HAND_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
   [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
-const C = { WHITE: "#ffffff", GRAY: "#b4b4b4", CYAN: "#46d2ff", GREEN: "#3cd278", GOLD: "#ffd73c",
-  ORANGE: "#ffaa28", APPLE: "#e63c3c", BERRY: "#326ec8", RED: "#ff5a5a", PURPLE: "#8c5ae6" };
+const C = { WHITE: "#ffffff", TEXT: "#26262e", GRAY: "#6b6b78", CYAN: "#0b8fcf", GREEN: "#1fa35a", GOLD: "#d99a00",
+  ORANGE: "#e8790c", APPLE: "#e63c3c", BERRY: "#326ec8", RED: "#e23b3b", PURPLE: "#7a4fd6" };
 const FONT = '"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",sans-serif';
 const INSIGHT = [
   ["내가 벤 선은 하나의 식이에요:   w1·x + w2·y + b = 0", "Q. 선을 기울이면 어떤 숫자가 바뀔까?  평행하게 옮기면?"],
@@ -101,15 +101,15 @@ const INSIGHT = [
   ["XOR은 선 하나로는 절대 못 나눠요 — 사람도, 퍼셉트론도.", "선 두 개 + 조합 = 은닉층 = 신경망!"],
 ];
 const INTRO = {
-  sep: [["식탁 위에 사과와 블루베리가 놓여 있어요.", C.WHITE], ["한 번에 베어서 둘을 갈라 보세요.", C.WHITE],
+  sep: [["식탁 위에 사과와 블루베리가 놓여 있어요.", C.TEXT], ["한 번에 베어서 둘을 갈라 보세요.", C.TEXT],
         ["내가 벤 선 = 결정 경계(decision boundary)", C.GOLD]],
-  noisy: [["이번엔 데이터가 뒤섞였어요. 엉뚱한 쪽에 있는 과일도 있어요.", C.WHITE],
+  noisy: [["이번엔 데이터가 뒤섞였어요. 엉뚱한 쪽에 있는 과일도 있어요.", C.TEXT],
           ["그래도 '가장 좋은 선'을 찾을 수 있을까요?", C.GOLD]],
-  light: [["먼저 내가 베고, 같은 과일로 컴퓨터가 학습해요.", C.WHITE],
-          ["컴퓨터가 선을 한 단계씩 고쳐 가는 모습을 지켜보세요.", C.WHITE],
+  light: [["먼저 내가 베고, 같은 과일로 컴퓨터가 학습해요.", C.TEXT],
+          ["컴퓨터가 선을 한 단계씩 고쳐 가는 모습을 지켜보세요.", C.TEXT],
           ["컴퓨터를 이길 수 있을까요?", C.GOLD], ["(+ / - 키: 컴퓨터의 학습률 바꾸기)", C.GRAY]],
-  xor: [["마지막 과일 그릇! 사과와 블루베리가 대각선으로 놓여 있어요.", C.WHITE],
-        ["한 번에 갈라 보세요… 할 수 있다면요.", C.WHITE], ["생각해 보기: 직선 하나로 가능할까?", C.GOLD]],
+  xor: [["마지막 과일 그릇! 사과와 블루베리가 대각선으로 놓여 있어요.", C.TEXT],
+        ["한 번에 갈라 보세요… 할 수 있다면요.", C.TEXT], ["생각해 보기: 직선 하나로 가능할까?", C.GOLD]],
 };
 
 const canvas = document.getElementById("c");
@@ -124,15 +124,15 @@ function rrPath(x1, y1, x2, y2, r) {
   ctx.moveTo(x1 + r, y1); ctx.arcTo(x2, y1, x2, y2, r); ctx.arcTo(x2, y2, x1, y2, r);
   ctx.arcTo(x1, y2, x1, y1, r); ctx.arcTo(x1, y1, x2, y1, r); ctx.closePath();
 }
-function panel(x1, y1, x2, y2, { fill = "rgba(26,24,28,0.62)", r = 16, stroke = "rgba(120,120,120,0.8)", lw = 1 } = {}) {
+function panel(x1, y1, x2, y2, { fill = "rgba(255,255,255,0.82)", r = 16, stroke = "rgba(0,0,0,0.12)", lw = 1 } = {}) {
   rrPath(x1, y1, x2, y2, r);
   ctx.fillStyle = fill; ctx.fill();
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
 }
-function text(s, x, y, { size = 24, color = C.WHITE, bold = false, align = "center", base = "middle", shadow = true } = {}) {
+function text(s, x, y, { size = 24, color = C.TEXT, bold = false, align = "center", base = "middle", shadow = true } = {}) {
   ctx.font = `${bold ? 700 : 400} ${size}px ${FONT}`;
   ctx.textAlign = align; ctx.textBaseline = base;
-  if (shadow) { ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillText(s, x + 2, y + 2); }
+  if (shadow) { ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.fillText(s, x + 1.5, y + 1.5); }
   ctx.fillStyle = color; ctx.fillText(s, x, y);
 }
 function circle(x, y, r, fill, stroke, lw = 1) {
@@ -466,11 +466,11 @@ function linePx(w) {
 }
 function drawLine(w, color, thick = 4, label = null, pos = 0.5) {
   const s = linePx(w); if (!s) return;
-  seg(s[0], s[1], "rgba(0,0,0,0.85)", thick + 4);
+  seg(s[0], s[1], "rgba(255,255,255,0.95)", thick + 4);
   seg(s[0], s[1], color, thick);
   if (label) {
     const mx = s[0][0] + (s[1][0] - s[0][0]) * pos, my = s[0][1] + (s[1][1] - s[0][1]) * pos;
-    panel(mx - 85, my - 19, mx + 85, my + 19, { fill: "rgba(26,24,28,0.85)", r: 12, stroke: color });
+    panel(mx - 85, my - 19, mx + 85, my + 19, { fill: "rgba(255,255,255,0.95)", r: 12, stroke: color });
     text(label, mx, my, { size: 19, color, bold: true, shadow: false });
   }
 }
@@ -507,7 +507,7 @@ function drawHud(g, now) {
     const lim = g.state === S.AIM ? WAVE_TIME : WAVE2_TIME, rem = Math.max(0, lim - (now - g.tWave));
     text(`웨이브 ${g.wave}/${st.waves}   ${rem.toFixed(1)}초`, cx, 40, { size: 22 });
     const bx1 = cx - 230, bx2 = cx + 230;
-    panel(bx1, 66, bx2, 80, { fill: "#464646", r: 7, stroke: null });
+    panel(bx1, 66, bx2, 80, { fill: "#dcdfe8", r: 7, stroke: null });
     panel(bx1, 66, bx1 + Math.max(14, (bx2 - bx1) * rem / lim), 80, { fill: rem < 4 ? C.ORANGE : C.CYAN, r: 7, stroke: null });
     const msg = g.state === S.AIM ? "한 번 베어서 사과와 블루베리를 갈라 보세요!" : `두 번 베기:  ${2 - g.slashes.length}번 더 베세요`;
     text(msg, cx, 102, { size: 17, color: C.GRAY });
@@ -519,8 +519,8 @@ function drawHud(g, now) {
   text(g.condition === "hand" ? "입력: 손(웹캠)" : "입력: 마우스·터치", W - 70, 106, { size: 13, color: "#888", shadow: false });
 }
 function drawCard(title, lines, color = C.GOLD, foot = "아무 곳이나 베거나 클릭 / SPACE 를 누르면 계속", yTop = 170, yBot = H - 60) {
-  ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, W, H);
-  panel(170, yTop, W - 170, yBot, { fill: "rgba(26,24,28,0.94)", r: 24 });
+  ctx.fillStyle = "rgba(238,241,246,0.65)"; ctx.fillRect(0, 0, W, H);
+  panel(170, yTop, W - 170, yBot, { fill: "rgba(255,255,255,0.98)", r: 24, stroke: "rgba(0,0,0,0.1)" });
   text(title, W / 2, yTop + 50, { size: 40, bold: true, color });
   lines.forEach(([s, c], i) => text(s, W / 2, yTop + 115 + i * 40, { size: 22, color: c }));
   if (foot) text(foot, W / 2, yBot - 35, { size: 20, color: C.CYAN });
@@ -532,7 +532,7 @@ function drawNN(cx, cy) {
   for (const a of L) for (const b of Hn) seg(a, b, C.GRAY, 2);
   for (const b of Hn) seg(b, O, C.GRAY, 2);
   for (const [n, col] of [...L.map(n => [n, C.CYAN]), ...Hn.map(n => [n, C.GOLD]), [O, C.GREEN]]) {
-    circle(n[0], n[1], 26, "#1e1c22", col, 3);
+    circle(n[0], n[1], 26, "#ffffff", col, 3);
     text(n[2], n[0], n[1] + 44, { size: 16, color: col, shadow: false });
   }
   text("입력층", cx - 220, cy - 95, { size: 16, color: C.GRAY, shadow: false });
@@ -541,7 +541,7 @@ function drawNN(cx, cy) {
 }
 function render(g, now) {
   const [x1, y1, x2, y2] = FIELD, s = g.state;
-  panel(x1, y1, x2, y2, { fill: "rgba(20,18,18,0.45)", r: 18, stroke: "rgba(80,80,80,0.9)" });
+  panel(x1, y1, x2, y2, { fill: "rgba(255,255,255,0.6)", r: 18, stroke: "rgba(0,0,0,0.12)" });
 
   if (s === S.AIM || s === S.AIM2 || s === S.INTRO) {
     drawFruits(g);
@@ -565,7 +565,7 @@ function render(g, now) {
     if (g.userW) drawLine(g.userW, "#787878", 2);
     drawLine(mw, C.GOLD, 5);
     if (m.cur !== null) { const f = g.fruits[m.cur]; const p = toPx(f.x, f.y); circle(p[0], p[1], 28, null, m.updated ? C.RED : C.GREEN, 4); }
-    panel(x1 + 20, y1 + 15, x1 + 600, y1 + 165, { fill: "rgba(26,24,28,0.88)", r: 14, stroke: C.GOLD });
+    panel(x1 + 20, y1 + 15, x1 + 600, y1 + 165, { fill: "rgba(255,255,255,0.95)", r: 14, stroke: C.GOLD });
     text("컴퓨터가 학습 중 (퍼셉트론)", x1 + 40, y1 + 44, { size: 22, bold: true, align: "left", color: C.GOLD });
     text(`반복 ${m.epoch}회차   살펴본 수 ${m.steps}   고친 수 ${m.updates}   정확도 ${Math.round(m.acc * 100)}%`, x1 + 40, y1 + 78, { size: 18, align: "left" });
     text(`선: ${fmtW(mw)}`, x1 + 40, y1 + 108, { size: 18, align: "left" });
@@ -585,10 +585,10 @@ function render(g, now) {
     drawFruits(g);
     const m = g.machine;
     drawCard("두 번 베기 해금!", [
-      [`나의 최고: ${Math.round(g.userAcc * 100)}%     퍼셉트론 최고: ${Math.round(m.bestAcc * 100)}%`, C.WHITE],
-      ["이 XOR 배치는 직선 하나로는 절대 나눌 수 없어요.", C.WHITE],
+      [`나의 최고: ${Math.round(g.userAcc * 100)}%     퍼셉트론 최고: ${Math.round(m.bestAcc * 100)}%`, C.TEXT],
+      ["이 XOR 배치는 직선 하나로는 절대 나눌 수 없어요.", C.TEXT],
       ["이제 두 번 벨 수 있어요.  베기 한 번 = 뉴런 하나!", C.GOLD],
-      ["두 선이 만든 영역마다 사과인지 블루베리인지 정해요.", C.WHITE]], C.ORANGE);
+      ["두 선이 만든 영역마다 사과인지 블루베리인지 정해요.", C.TEXT]], C.ORANGE);
   } else if (s === S.JUDGE2) {
     if (g.wD1) {
       const w1 = g.wD1, w2 = g.wD2, mp = g.dMap;
@@ -610,26 +610,26 @@ function render(g, now) {
     drawCard(`${st.name}:  ${st.title}`, INTRO[st.kind], st.kind === "xor" ? C.ORANGE : C.GOLD, undefined, 170, H - 160);
   } else if (s === S.STAGE_END) {
     const st = g.st, avg = g.accs.reduce((a, b) => a + b, 0) / Math.max(1, g.accs.length);
-    const lines = [[`내 정확도: ${g.accs.map(a => Math.round(a * 100) + "%").join("  ")}     (평균 ${Math.round(avg * 100)}%)`, C.WHITE]];
-    if (st.kind === "light" && g.machine) lines.push([`컴퓨터(퍼셉트론) 최고: ${Math.round(g.machine.bestAcc * 100)}%`, C.WHITE]);
-    if (st.kind === "xor") lines.push([`두 번 베기: ${Math.round(g.dAcc * 100)}%`, C.WHITE]);
-    lines.push([`+${g.stageXp} XP    (누적 ${g.xp} / ${rankOf(g.xp)})`, C.GOLD], ["", C.WHITE]);
+    const lines = [[`내 정확도: ${g.accs.map(a => Math.round(a * 100) + "%").join("  ")}     (평균 ${Math.round(avg * 100)}%)`, C.TEXT]];
+    if (st.kind === "light" && g.machine) lines.push([`컴퓨터(퍼셉트론) 최고: ${Math.round(g.machine.bestAcc * 100)}%`, C.TEXT]);
+    if (st.kind === "xor") lines.push([`두 번 베기: ${Math.round(g.dAcc * 100)}%`, C.TEXT]);
+    lines.push([`+${g.stageXp} XP    (누적 ${g.xp} / ${rankOf(g.xp)})`, C.GOLD], ["", C.TEXT]);
     for (const t of INSIGHT[g.stageIdx]) lines.push([t, C.CYAN]);
     if (g.newBadges.length) lines.push(["새 배지:  " + g.newBadges.join("  /  "), C.GOLD]);
     drawCard(`${st.name} 완료!`, lines, C.GOLD, "베거나 클릭 / SPACE: 다음 단계      R: 이 단계 다시");
   } else if (s === S.FINAL) {
     drawCard("모든 단계 완료!", [
       [`XP ${g.xp}  /  ${rankOf(g.xp)}     배지: ${g.badges.join(", ") || "-"}`, C.GOLD],
-      ["오늘 내가 발견한 것", C.WHITE]], C.GOLD, "R: 처음부터 다시      'CSV 저장' 버튼으로 기록 내려받기", 150, H - 30);
+      ["오늘 내가 발견한 것", C.TEXT]], C.GOLD, "R: 처음부터 다시      'CSV 저장' 버튼으로 기록 내려받기", 150, H - 30);
     drawNN(W / 2, 465);
     text("선 1개 = 뉴런 1개(퍼셉트론).   뉴런을 층으로 쌓으면 = 신경망", W / 2, 600, { size: 21, color: C.CYAN });
   }
 }
 function drawTrail(pts, active) {
-  for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i], active ? "#ffffff" : "#c8e6ff", Math.max(1, 10 * i / pts.length));
+  for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i], active ? "#7a4fd6" : "#9fb3d6", Math.max(1, 10 * i / pts.length));
 }
 function drawHand(pts) {
-  for (const [a, b] of HAND_CONN) seg(pts[a], pts[b], "rgba(180,210,230,0.8)", 1.5);
+  for (const [a, b] of HAND_CONN) seg(pts[a], pts[b], "rgba(60,90,140,0.75)", 2);
   circle(pts[8][0], pts[8][1], 10, null, C.CYAN, 2);
   circle(pts[8][0], pts[8][1], 4, C.WHITE);
 }
@@ -668,7 +668,7 @@ function loop() {
   // 배경: 웹캠(거울 모드) 또는 단색
   if (condition === "hand" && video.readyState >= 2) {
     ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, W, H); ctx.restore();
-    ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(255,255,255,0.35)"; ctx.fillRect(0, 0, W, H);
     if (landmarker && video.currentTime !== lastVideoTime) {
       lastVideoTime = video.currentTime;
       const res = landmarker.detectForVideo(video, performance.now());
@@ -677,7 +677,7 @@ function loop() {
       else slasher.reset();
     }
   } else {
-    const gr = ctx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "#2a2f3a"); gr.addColorStop(1, "#14161c");
+    const gr = ctx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "#f7f9fc"); gr.addColorStop(1, "#e3e9f2");
     ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
   }
 
