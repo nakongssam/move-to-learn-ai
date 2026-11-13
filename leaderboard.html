@@ -35,7 +35,7 @@
   <p class="note">닉네임별 최고 누적 XP · 5초마다 자동 새로고침 · <a href="./">게임 목록</a></p>
 </main>
 <script type="module">
-import { SHEET_API, fetchBoard, escapeHtml } from "./common/sheet.js";
+import { SHEET_API, fetchBoard, escapeHtml } from "./common/sheet.js?v=3";
 const q = new URLSearchParams(location.search);
 const gameSel = document.getElementById("game"), roomIn = document.getElementById("room");
 if (q.get("game")) gameSel.value = q.get("game");
