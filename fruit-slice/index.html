@@ -12,7 +12,7 @@
   - 설치 없이 브라우저에서 실행 (GitHub Pages 등 https 주소에 올리면 됨)
   - 손 인식: Google MediaPipe Hand Landmarker (웹 버전, 영상은 이 컴퓨터 안에서만 처리)
   - 입력 방식: 손(웹캠) / 마우스·터치  → 연구 비교 조건으로 사용 가능 (기록에 condition으로 저장)
-  - 기록: 'CSV 저장' 버튼으로 내려받기.  Supabase 설정 시 자동 업로드(아래 SUPABASE_* 참고)
+  - 기록: 'CSV 저장' 버튼으로 내려받기 + 구글 시트 자동 수집(common/sheet.js의 SHEET_API 설정 시)
 -->
 <style>
   html, body { margin: 0; height: 100%; background: #eef1f6; overflow: hidden;
@@ -46,8 +46,14 @@
   <div class="box">
     <h1>🍎 과일 베기</h1>
     <p class="sub">내가 퍼셉트론! — 결정 경계로 배우는 인공지능</p>
-    <label for="name">이름 또는 번호</label>
-    <input id="name" placeholder="예: 10101 홍길동" autocomplete="off">
+    <label for="name">학번·이름 <span style="color:#999">(기록용 — 순위표에는 안 보여요)</span></label>
+    <input id="name" placeholder="예: 10701 홍길동" autocomplete="off">
+    <div style="display:flex;gap:10px">
+      <div style="flex:1"><label for="nick">닉네임 <span style="color:#999">(순위표에 표시)</span></label>
+        <input id="nick" placeholder="예: 사과킬러" maxlength="12" autocomplete="off"></div>
+      <div style="width:130px"><label for="room">반 코드</label>
+        <input id="room" placeholder="예: 1-7" maxlength="10" autocomplete="off"></div>
+    </div>
     <label for="mode">입력 방식</label>
     <select id="mode">
       <option value="hand">손 (웹캠) — 엄지·검지를 붙인 채 끌었다 떼면 베기</option>
@@ -61,6 +67,8 @@
 <div id="tools"><button id="csv">기록 CSV 저장</button></div>
 
 <script type="module">
+import { sendToSheet, setupLeaderboard } from "../common/sheet.js";
+const GAME_ID = "fruit";
 // =====================================================================
 // 설정
 // =====================================================================
@@ -68,15 +76,6 @@ const MP_VER = "0.10.14";
 const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
-// (선택) Supabase에 기록 자동 저장 — 비워 두면 사용 안 함
-//   테이블 예시 SQL:
-//   create table fruit_log (id bigint generated always as identity primary key, time text, player text,
-//     condition text, stage text, wave int, mode text, accuracy real, n_fruits int, line text, line2 text,
-//     slash_time_s real, learning_rate real);
-//   (anon 사용자에게 insert 권한을 주는 RLS 정책 필요)
-const SUPABASE_URL = "";   // 예: "https://abcd1234.supabase.co"
-const SUPABASE_KEY = "";   // anon public key
-const SUPABASE_TABLE = "fruit_log";
 
 const W = 1280, H = 720;
 const STAGES = [
@@ -343,7 +342,12 @@ class Game {
     this.startStage(now);
   }
   get st() { return STAGES[this.stageIdx]; }
-  setState(s, now) { this.state = s; this.tState = now; }
+  setState(s, now) {
+    this.state = s; this.tState = now;
+    if (s === S.STAGE_END || s === S.FINAL)   // 단계가 끝날 때마다 순위표용 누적 XP 전송
+      sendToSheet({ kind: "score", game: GAME_ID, room: this.room || "", nickname: this.nickname || this.player,
+                    player: this.player, condition: this.condition, stage: this.st.name, xp: this.xp });
+  }
   startStage(now) {
     this.wave = 0; this.accs = []; this.stageXp = 0; this.newBadges = [];
     this.fruits = []; this.machine = null; this.userW = null; this.userAcc = 0; this.slashes = [];
@@ -458,14 +462,7 @@ class Game {
       slash_time_s: t == null ? null : +t.toFixed(2), learning_rate: mode === "machine" ? this.lr : null,
     };
     this.logs.push(row);
-    if (SUPABASE_URL && SUPABASE_KEY) {
-      fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
-        method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
-                   "Content-Type": "application/json", Prefer: "return=minimal" },
-        body: JSON.stringify(row),
-      }).catch(e => console.warn("Supabase 저장 실패", e));
-    }
+    sendToSheet({ kind: "log", game: GAME_ID, row: { ...row, nickname: this.nickname || "", room: this.room || "" } });
   }
 }
 
@@ -741,6 +738,9 @@ document.getElementById("go").addEventListener("click", async () => {
   const btn = document.getElementById("go"), st = document.getElementById("status");
   const status = m => (st.textContent = m);
   const player = document.getElementById("name").value.trim() || "guest";
+  const nickname = document.getElementById("nick").value.trim() || player;
+  const room = document.getElementById("room").value.trim();
+  try { localStorage.setItem("mtl_info", JSON.stringify({ player, nickname, room })); } catch {}
   condition = document.getElementById("mode").value;
   btn.disabled = true;
   if (condition === "hand") {
@@ -753,6 +753,7 @@ document.getElementById("go").addEventListener("click", async () => {
   }
   document.getElementById("start").style.display = "none";
   game = new Game(player, condition, performance.now() / 1000);
+  game.nickname = nickname; game.room = room;
 });
 
 document.getElementById("csv").addEventListener("click", () => {
@@ -768,6 +769,13 @@ document.getElementById("csv").addEventListener("click", () => {
 
 // 테스트·디버그용 접근 (브라우저 콘솔에서 사용 가능)
 window.__fruit = { get game() { return game; }, S, toPx, linePx, orient, doubleRegions, genData, Perceptron, accuracy };
+// 지난번 입력값 채워 두기
+try { const s = JSON.parse(localStorage.getItem("mtl_info") || "{}");
+  if (s.player) document.getElementById("name").value = s.player;
+  if (s.nickname) document.getElementById("nick").value = s.nickname;
+  if (s.room) document.getElementById("room").value = s.room; } catch {}
+setupLeaderboard(GAME_ID, () => ({ room: game ? game.room : document.getElementById("room").value.trim(),
+                                   nickname: game ? game.nickname : "" }));
 requestAnimationFrame(loop);
 </script>
 </body>

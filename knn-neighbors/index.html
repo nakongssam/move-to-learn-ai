@@ -46,8 +46,14 @@
   <div class="box">
     <h1>🖐 이웃에게 물어봐</h1>
     <p class="sub">k-최근접 이웃(k-NN) — 손가락 수가 곧 k!</p>
-    <label for="name">이름 또는 번호</label>
-    <input id="name" placeholder="예: 10101 홍길동" autocomplete="off">
+    <label for="name">학번·이름 <span style="color:#999">(기록용 — 순위표에는 안 보여요)</span></label>
+    <input id="name" placeholder="예: 10701 홍길동" autocomplete="off">
+    <div style="display:flex;gap:10px">
+      <div style="flex:1"><label for="nick">닉네임 <span style="color:#999">(순위표에 표시)</span></label>
+        <input id="nick" placeholder="예: 사과킬러" maxlength="12" autocomplete="off"></div>
+      <div style="width:130px"><label for="room">반 코드</label>
+        <input id="room" placeholder="예: 1-7" maxlength="10" autocomplete="off"></div>
+    </div>
     <label for="mode">입력 방식</label>
     <select id="mode">
       <option value="hand">손 (웹캠) — 손바닥 위치 = 새 데이터, 펼친 손가락 수 = k</option>
@@ -61,13 +67,14 @@
 <div id="tools"><a href="../">← 게임 목록</a><button id="csv">기록 CSV 저장</button></div>
 
 <script type="module">
+import { sendToSheet, setupLeaderboard } from "../common/sheet.js";
+const GAME_ID = "knn";
 // =====================================================================
 // 설정
 // =====================================================================
 const MP_VER = "0.10.14";
 const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-const SUPABASE_URL = "", SUPABASE_KEY = "", SUPABASE_TABLE = "knn_log";   // (선택) 자동 기록
 
 const W = 1280, H = 720;
 const FIELD = [60, 140, W - 60, H - 40];
@@ -231,7 +238,12 @@ class Game {
     this.startStage(now);
   }
   get st() { return STAGES[this.stageIdx]; }
-  setState(s, now) { this.state = s; this.tState = now; }
+  setState(s, now) {
+    this.state = s; this.tState = now;
+    if (s === S.STAGE_END || s === S.FINAL)   // 단계가 끝날 때마다 순위표용 누적 XP 전송
+      sendToSheet({ kind: "score", game: GAME_ID, room: this.room || "", nickname: this.nickname || this.player,
+                    player: this.player, condition: this.condition, stage: this.st.name, xp: this.xp });
+  }
   gain(x) { this.xp += x; this.stageXp += x; }
   badge(n) { if (!this.badges.includes(n)) { this.badges.push(n); this.newBadges.push(n); } }
   startStage(now) {
@@ -353,10 +365,7 @@ class Game {
     const row = { time: new Date().toLocaleString("sv-SE"), player: this.player, condition: this.condition,
       stage: this.st.name, event, detail: JSON.stringify(data) };
     this.logs.push(row);
-    if (SUPABASE_URL && SUPABASE_KEY)
-      fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, { method: "POST", headers: { apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-        body: JSON.stringify(row) }).catch(e => console.warn(e));
+    sendToSheet({ kind: "log", game: GAME_ID, row: { ...row, nickname: this.nickname || "", room: this.room || "" } });
   }
 }
 
@@ -592,6 +601,9 @@ document.getElementById("go").addEventListener("click", async () => {
   const btn = document.getElementById("go"), st = document.getElementById("status");
   const status = m => (st.textContent = m);
   const player = document.getElementById("name").value.trim() || "guest";
+  const nickname = document.getElementById("nick").value.trim() || player;
+  const room = document.getElementById("room").value.trim();
+  try { localStorage.setItem("mtl_info", JSON.stringify({ player, nickname, room })); } catch {}
   condition = document.getElementById("mode").value;
   btn.disabled = true;
   if (condition === "hand") {
@@ -600,6 +612,7 @@ document.getElementById("go").addEventListener("click", async () => {
   }
   document.getElementById("start").style.display = "none";
   game = new Game(player, condition, performance.now() / 1000);
+  game.nickname = nickname; game.room = room;
 });
 document.getElementById("csv").addEventListener("click", () => {
   if (!game || !game.logs.length) { alert("아직 저장할 기록이 없어요."); return; }
@@ -611,6 +624,13 @@ document.getElementById("csv").addEventListener("click", () => {
   a.download = `knn_log_${game.player}_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
 });
 window.__knn = { get game() { return game; }, S, knn, countFingers, toPx };
+// 지난번 입력값 채워 두기
+try { const s = JSON.parse(localStorage.getItem("mtl_info") || "{}");
+  if (s.player) document.getElementById("name").value = s.player;
+  if (s.nickname) document.getElementById("nick").value = s.nickname;
+  if (s.room) document.getElementById("room").value = s.room; } catch {}
+setupLeaderboard(GAME_ID, () => ({ room: game ? game.room : document.getElementById("room").value.trim(),
+                                   nickname: game ? game.nickname : "" }));
 requestAnimationFrame(loop);
 </script>
 </body>

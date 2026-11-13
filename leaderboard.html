@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>순위표 — Move to Learn AI</title>
+<style>
+  body { margin: 0; min-height: 100vh; background: #eef1f6; color: #22222a;
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 36px 24px; }
+  h1 { margin: 0 0 18px; font-size: 40px; }
+  .bar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; align-items: center; }
+  select, input { padding: 10px 12px; border-radius: 10px; border: 1px solid #cfd4de; font-size: 17px; font-family: inherit; }
+  .row { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #dde1ea;
+    border-radius: 14px; padding: 16px 22px; margin-bottom: 10px; font-size: 26px; }
+  .row:nth-child(1) { border-color: #f0c84a; box-shadow: 0 4px 18px rgba(217,154,0,.18); }
+  .xp { color: #d99a00; font-weight: 700; }
+  .stage { color: #888; font-size: 16px; margin-left: 10px; }
+  .note { color: #888; font-size: 14px; margin-top: 16px; }
+  a { color: #7a4fd6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🏆 순위표</h1>
+  <div class="bar">
+    <select id="game">
+      <option value="fruit">🍎 과일 베기</option>
+      <option value="knn">🖐 이웃에게 물어봐 (k-NN)</option>
+    </select>
+    <input id="room" placeholder="반 코드 (예: 1-7) — 비우면 전체" size="22">
+    <span id="when" style="color:#888"></span>
+  </div>
+  <div id="list"></div>
+  <p class="note">닉네임별 최고 누적 XP · 5초마다 자동 새로고침 · <a href="./">게임 목록</a></p>
+</main>
+<script type="module">
+import { SHEET_API, fetchBoard, escapeHtml } from "./common/sheet.js";
+const q = new URLSearchParams(location.search);
+const gameSel = document.getElementById("game"), roomIn = document.getElementById("room");
+if (q.get("game")) gameSel.value = q.get("game");
+if (q.get("room")) roomIn.value = q.get("room");
+async function refresh() {
+  const list = document.getElementById("list");
+  if (!SHEET_API) { list.innerHTML = "<p>구글 시트가 아직 연결되지 않았어요. (common/sheet.js의 SHEET_API)</p>"; return; }
+  try {
+    const board = await fetchBoard(gameSel.value, roomIn.value.trim(), 20);
+    list.innerHTML = board.length ? board.map((b, i) =>
+      `<div class="row"><span>${["🥇", "🥈", "🥉"][i] || (i + 1) + "."} ${escapeHtml(b.nickname)}<span class="stage">${escapeHtml(b.stage || "")}</span></span>
+       <span class="xp">${b.xp} XP</span></div>`).join("") : "<p>아직 기록이 없어요.</p>";
+    document.getElementById("when").textContent = "업데이트 " + new Date().toLocaleTimeString("ko-KR");
+  } catch { list.innerHTML = "<p style='color:#e23b3b'>순위표를 불러오지 못했어요.</p>"; }
+}
+gameSel.addEventListener("change", refresh);
+roomIn.addEventListener("change", refresh);
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>
