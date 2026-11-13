@@ -34,8 +34,8 @@
   #status { min-height: 22px; margin: 14px 0 0; color: #0b8fcf; font-size: 14px; }
   .tip { color: #888; font-size: 12.5px; line-height: 1.6; margin: 12px 0 0; }
   #tools { position: fixed; right: 12px; bottom: 10px; z-index: 5; display: flex; gap: 8px; }
-  #tools button { padding: 7px 12px; border-radius: 9px; border: 1px solid #cfd4de; background: rgba(255,255,255,.92);
-    color: #333; font-size: 13px; cursor: pointer; font-family: inherit; }
+  #tools button, #tools a { padding: 7px 12px; border-radius: 9px; border: 1px solid #cfd4de; background: rgba(255,255,255,.92);
+    color: #333; font-size: 13px; cursor: pointer; font-family: inherit; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -64,11 +64,12 @@
       <option value="mouse">마우스·터치 — 드래그해서 베기</option>
     </select>
     <button id="go">시작하기</button>
+    <a href="../" style="display:block;margin-top:12px;color:#7a4fd6;font-size:14px;text-decoration:none">🏠 게임 목록으로</a>
     <p id="status"></p>
     <p class="tip">웹캠 모드는 카메라 권한을 허용해야 해요.<br>영상은 이 컴퓨터 안에서만 처리되고 어디에도 전송되지 않아요.</p>
   </div>
 </div>
-<div id="tools"><button id="csv">기록 CSV 저장</button></div>
+<div id="tools"><a href="../">🏠 홈</a><button id="csv">기록 CSV 저장</button></div>
 
 <script type="module">
 import { sendToSheet, setupLeaderboard } from "../common/sheet.js?v=3";
