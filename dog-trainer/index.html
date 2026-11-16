@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>AI 강아지 훈련사: 강화학습</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  AI 강아지 훈련사 (강화학습, Q-러닝)
+  정보 교과: 인공지능 — 보상, 행동, 상태, 탐험과 활용, 가치(Q값), 보상 설계의 함정
+  AI융합교육대학원 박사과정 김한나
+
+  제스처 일치성: 엄지 척 👍 = 보상(+1), 엄지 내림 👎 = 벌점(-1)
+  강아지는 실제 Q-러닝으로 배운다:  Q(s,a) ← Q(s,a) + α [ r + γ·max Q(s',·) − Q(s,a) ]
+  입력 방식: 손(웹캠) / 마우스·키보드(화면 버튼, ↑ ↓ 키) → 기록에 condition으로 저장
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #eef1f6; overflow: hidden;
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); display: block; touch-action: none; }
+  #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(238, 241, 246, .97); color: #22222a; z-index: 10; }
+  .box { background: #fff; border: 1px solid #dde1ea; border-radius: 20px; padding: 30px 44px;
+    width: min(540px, 88vw); text-align: center; box-shadow: 0 10px 40px rgba(40,50,80,.15); }
+  .box h1 { margin: 0 0 4px; font-size: 30px; }
+  .box .sub { margin: 0 0 18px; color: #7a4fd6; }
+  .box label { display: block; text-align: left; margin: 12px 0 6px; color: #666; font-size: 14px; }
+  .box input, .box select { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: 10px;
+    border: 1px solid #cfd4de; background: #fff; color: #22222a; font-size: 16px; font-family: inherit; }
+  .box button { margin-top: 20px; width: 100%; padding: 13px; border: 0; border-radius: 12px;
+    background: #7a4fd6; color: #fff; font-size: 18px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .box button:disabled { opacity: .5; cursor: wait; }
+  #status { min-height: 22px; margin: 12px 0 0; color: #0b8fcf; font-size: 14px; }
+  .tip { color: #888; font-size: 12.5px; line-height: 1.6; margin: 10px 0 0; }
+  #tools { position: fixed; right: 12px; bottom: 10px; z-index: 5; display: flex; gap: 8px; }
+  #tools button, #tools a { padding: 7px 12px; border-radius: 9px; border: 1px solid #cfd4de; background: rgba(255,255,255,.92);
+    color: #333; font-size: 13px; cursor: pointer; font-family: inherit; text-decoration: none; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="1280" height="720"></canvas></div>
+<video id="v" playsinline muted style="display:none"></video>
+
+<div id="start">
+  <div class="box">
+    <h1>🐶 AI 강아지 훈련사</h1>
+    <p class="sub">엄지 척으로 가르치는 강화학습</p>
+    <div style="display:flex;gap:10px">
+      <div style="width:150px"><label for="sid">학번</label>
+        <input id="sid" placeholder="예: 10701" maxlength="10" inputmode="numeric" autocomplete="off"></div>
+      <div style="flex:1"><label for="name">이름 <span style="color:#999">(기록용 — 순위표엔 안 보여요)</span></label>
+        <input id="name" placeholder="예: 홍길동" maxlength="20" autocomplete="off"></div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <div style="flex:1"><label for="nick">닉네임 <span style="color:#999">(순위표에 표시)</span></label>
+        <input id="nick" placeholder="예: 멍멍조련사" maxlength="12" autocomplete="off"></div>
+      <div style="width:130px"><label for="room">반 코드</label>
+        <input id="room" placeholder="예: 1-7" maxlength="10" autocomplete="off"></div>
+    </div>
+    <label for="mode">입력 방식</label>
+    <select id="mode">
+      <option value="hand">손 (웹캠) — 👍 엄지 척 = 칭찬, 👎 엄지 내림 = 꾸중</option>
+      <option value="mouse">마우스·키보드 — 화면 버튼 또는 ↑(칭찬) ↓(꾸중) 키</option>
+    </select>
+    <button id="go">시작하기</button>
+    <a href="../" style="display:block;margin-top:12px;color:#7a4fd6;font-size:14px;text-decoration:none">🏠 게임 목록으로</a>
+    <p id="status"></p>
+    <p class="tip">웹캠 모드는 카메라 권한을 허용해야 해요.<br>영상은 이 컴퓨터 안에서만 처리되고 어디에도 전송되지 않아요.</p>
+  </div>
+</div>
+<div id="tools"><a href="../">🏠 홈</a><button id="csv">기록 CSV 저장</button></div>
+
+<script type="module">
+import { sendToSheet, setupLeaderboard } from "../common/sheet.js?v=3";
+const GAME_ID = "dog";
+
+// =====================================================================
+// 설정
+// =====================================================================
+const MP_VER = "0.10.14";
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const W = 1280, H = 720;
+const ALPHA = 0.5, GAMMA = 0.9;
+const ACTIONS = [[1, 0], [0, 1], [-1, 0], [0, -1]];      // 오른쪽, 아래, 왼쪽, 위
+const ACT_NAME = ["오른쪽", "아래", "왼쪽", "위"];
+
+const STAGES = [
+  { name: "1단계", title: "첫 산책: 뼈다귀 찾기", w: 5, h: 3, start: [0, 1], bone: [4, 1], puddles: [], ball: null,
+    envBone: 5, maxSteps: 20, eps: 0.25 },
+  { name: "2단계", title: "물웅덩이를 피해라", w: 7, h: 5, start: [0, 4], bone: [6, 0],
+    puddles: [[1, 2], [2, 2], [3, 2], [5, 1], [5, 2], [3, 4], [2, 0]], ball: null, envBone: 5, maxSteps: 32, eps: 0.25 },
+  { name: "보스", title: "장난꾸러기 훈련사", w: 6, h: 4, start: [0, 0], bone: [5, 0], puddles: [], ball: [5, 3],
+    envBone: 0, maxSteps: 24, eps: 0.25 },
+];
+const RANKS = [[0, "견습 훈련사"], [250, "산책 도우미"], [550, "강아지 조련사"], [900, "AI 마스터 트레이너"]];
+const HAND_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const C = { WHITE: "#ffffff", TEXT: "#26262e", GRAY: "#6b6b78", CYAN: "#0b8fcf", GREEN: "#1fa35a", GOLD: "#d99a00",
+  ORANGE: "#e8790c", RED: "#e23b3b", PURPLE: "#7a4fd6", BLUE: "#326ec8" };
+const FONT = '"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",sans-serif';
+
+const INTRO = [
+  [["강아지는 처음엔 아무것도 몰라요. 그냥 아무 데나 움직여요.", C.TEXT],
+   ["강아지가 한 칸 움직일 때마다 1초 안에 칭찬 👍 이나 꾸중 👎 을 해 주세요.", C.TEXT],
+   ["강아지는 받은 보상을 기억해서, 칸마다 '어느 쪽이 좋은지' 점수(Q값)를 쌓아요.", C.TEXT],
+   ["강아지가 혼자서 뼈다귀까지 가면 훈련 성공!", C.GOLD],
+   ["(마우스: 오른쪽 버튼 또는 ↑ ↓ 키 · P: 일시정지)", C.GRAY]],
+  [["이번엔 물웅덩이가 있어요. 웅덩이에 빠지면 강아지가 싫어해요 (−2).", C.TEXT],
+   ["웅덩이를 피해서 뼈다귀까지 가도록 가르쳐 주세요.", C.TEXT],
+   ["오른쪽의 '탐험률'은 강아지가 아는 길 대신 새로운 길을 시도하는 정도예요.", C.PURPLE],
+   ["탐험률을 바꿔 가며 언제 더 빨리 배우는지 관찰해 보세요.", C.GOLD]],
+  [["이 방에서는 뼈다귀에 자동 보상이 없어요. 오직 여러분의 👍 👎 만으로 배워요.", C.TEXT],
+   ["장난꾸러기 친구가 되어 볼까요? 뼈다귀 대신 ⚽ 공으로 가도록 가르쳐 보세요!", C.ORANGE],
+   ["강아지는 '뼈다귀가 좋은 것'을 아는 걸까요, '보상받는 것'을 아는 걸까요?", C.GOLD]],
+];
+const INSIGHT = [
+  ["강화학습: 정답을 알려 주지 않아도, 행동에 대한 보상만으로 스스로 배워요.",
+   "Q. 강아지는 뼈다귀 바로 옆이 아닌 칸에서도 어떻게 '좋은 방향'을 알게 되었을까요?"],
+   ["탐험(새로운 길 시도)과 활용(아는 길 가기) 사이의 균형이 중요해요.",
+   "Q. 탐험률이 0이면 어떤 문제가, 너무 크면 어떤 문제가 생길까요?"],
+  ["AI는 우리가 '원하는 것'이 아니라 '보상받는 것'을 배워요. 보상 설계가 잘못되면 AI도 엉뚱하게 배워요.",
+   "Q. 게임 AI나 추천 알고리즘이 '클릭 수'만 보상으로 받으면 어떤 일이 생길까요?"],
+];
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+// =====================================================================
+// 그리기 도우미
+// =====================================================================
+function rrPath(x1, y1, x2, y2, r) {
+  r = Math.max(0, Math.min(r, (x2 - x1) / 2, (y2 - y1) / 2));
+  ctx.beginPath(); ctx.moveTo(x1 + r, y1); ctx.arcTo(x2, y1, x2, y2, r); ctx.arcTo(x2, y2, x1, y2, r);
+  ctx.arcTo(x1, y2, x1, y1, r); ctx.arcTo(x1, y1, x2, y1, r); ctx.closePath();
+}
+function panel(x1, y1, x2, y2, { fill = "rgba(255,255,255,0.92)", r = 16, stroke = "rgba(0,0,0,0.12)", lw = 1 } = {}) {
+  rrPath(x1, y1, x2, y2, r); ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+function text(s, x, y, { size = 22, color = C.TEXT, bold = false, align = "center", base = "middle" } = {}) {
+  ctx.font = `${bold ? 700 : 400} ${size}px ${FONT}`; ctx.textAlign = align; ctx.textBaseline = base;
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function circle(x, y, r, fill, stroke, lw = 1) {
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+function seg(a, b, color, lw) {
+  ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = "round"; ctx.stroke();
+}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const buttons = [];
+function button(id, label, x1, y1, x2, y2, color = C.PURPLE, active = false, size = 18) {
+  const hover = mouse.pos && mouse.pos[0] >= x1 && mouse.pos[0] <= x2 && mouse.pos[1] >= y1 && mouse.pos[1] <= y2;
+  panel(x1, y1, x2, y2, { fill: active || hover ? color : "#fff", r: 12, stroke: color, lw: 2 });
+  text(label, (x1 + x2) / 2, (y1 + y2) / 2 + 1, { size, bold: true, color: active || hover ? "#fff" : color });
+  buttons.push({ id, x1, y1, x2, y2 });
+}
+
+function drawDog(x, y, s, mood, t) {   // mood: 1 기쁨, -1 시무룩, 0 보통
+  const wag = mood > 0 ? Math.sin(t * 25) * 0.6 : mood < 0 ? -0.2 : Math.sin(t * 4) * 0.2;
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  // 꼬리
+  ctx.save(); ctx.translate(22, 10); ctx.rotate(-0.6 + wag);
+  seg([0, 0], [16, -14], "#b5743a", 6); ctx.restore();
+  // 몸
+  ctx.beginPath(); ctx.ellipse(6, 14, 24, 15, 0, 0, Math.PI * 2); ctx.fillStyle = "#d8955a"; ctx.fill();
+  // 머리
+  circle(-14, -6, 18, "#e2a66b");
+  // 귀
+  const ear = mood < 0 ? 0.6 : 0;
+  for (const sx of [-1, 1]) {
+    ctx.save(); ctx.translate(-14 + sx * 12, -18); ctx.rotate(sx * (0.3 + ear));
+    ctx.beginPath(); ctx.ellipse(0, 8, 6, 12, 0, 0, Math.PI * 2); ctx.fillStyle = "#8a5326"; ctx.fill(); ctx.restore();
+  }
+  // 눈, 코
+  if (mood > 0) { for (const ex of [-21, -8]) { ctx.beginPath(); ctx.arc(ex, -9, 3.5, Math.PI, 0); ctx.strokeStyle = "#222"; ctx.lineWidth = 2.5; ctx.stroke(); } }
+  else for (const ex of [-21, -8]) circle(ex, -8, 3, "#222");
+  circle(-14, 1, 4, "#222");
+  if (mood < 0) circle(-6, -2, 2.5, "#5ab4ff");   // 눈물
+  if (mood > 0) { ctx.beginPath(); ctx.ellipse(-14, 9, 4, 5, 0, 0, Math.PI); ctx.fillStyle = "#e86a7a"; ctx.fill(); }
+  ctx.restore();
+}
+function drawBone(x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.rotate(-0.4);
+  ctx.fillStyle = "#fff6e0"; ctx.strokeStyle = "#c9a96e"; ctx.lineWidth = 2;
+  ctx.fillRect(-16, -5, 32, 10); ctx.strokeRect(-16, -5, 32, 10);
+  for (const [bx, by] of [[-17, -6], [-17, 6], [17, -6], [17, 6]]) circle(bx, by, 7, "#fff6e0", "#c9a96e", 2);
+  ctx.fillStyle = "#fff6e0"; ctx.fillRect(-15, -4, 30, 8);
+  ctx.restore();
+}
+function drawBall(x, y, s) {
+  circle(x, y, 16 * s, "#ffd84d", "#c9a400", 2);
+  ctx.beginPath(); ctx.arc(x, y, 16 * s, -0.6, 0.6); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x, y, 16 * s, Math.PI - 0.6, Math.PI + 0.6); ctx.stroke();
+}
+
+// =====================================================================
+// 손: 엄지 척 / 엄지 내림
+// =====================================================================
+function thumbGesture(pts) {
+  const palm = dist(pts[0], pts[9]) || 1;
+  const folded = [[8, 6], [12, 10], [16, 14], [20, 18]].every(([t, p]) => dist(pts[t], pts[0]) < dist(pts[p], pts[0]) * 1.1);
+  if (!folded || dist(pts[4], pts[2]) < 0.5 * palm) return 0;
+  const dy = pts[4][1] - pts[2][1];
+  if (dy < -0.4 * palm) return 1;
+  if (dy > 0.4 * palm) return -1;
+  return 0;
+}
+class GestureFilter {   // 같은 제스처가 3번 연속 보여야 인정 (깜빡임 방지)
+  constructor() { this.last = 0; this.n = 0; this.value = 0; }
+  update(g) { if (g === this.last) this.n++; else { this.last = g; this.n = 1; } if (this.n >= 3) this.value = g; return this.value; }
+}
+
+// =====================================================================
+// 강화학습 (Q-러닝)
+// =====================================================================
+const S = { INTRO: 1, RUN: 2, EP_END: 3, STAGE_END: 4, FINAL: 5 };
+const rankOf = xp => { let n = RANKS[0][1]; for (const [need, nm] of RANKS) if (xp >= need) n = nm; return n; };
+const same = (a, b) => a && b && a[0] === b[0] && a[1] === b[1];
+
+class Game {
+  constructor(info, now) {
+    Object.assign(this, info);
+    this.xp = 0; this.badges = []; this.stageIdx = 0; this.logs = []; this.speed = 1; this.paused = false;
+    this.startStage(now);
+  }
+  get st() { return STAGES[this.stageIdx]; }
+  setState(s, now) {
+    this.state = s; this.tState = now;
+    if (s === S.STAGE_END || s === S.FINAL)
+      sendToSheet({ kind: "score", game: GAME_ID, room: this.room || "", nickname: this.nickname || this.player,
+        player: this.player, student_id: this.studentId || "", name: this.studentName || "",
+        condition: this.condition, stage: this.st.name, xp: this.xp });
+  }
+  gain(x) { this.xp += x; this.stageXp += x; }
+  badge(n) { if (!this.badges.includes(n)) { this.badges.push(n); this.newBadges.push(n); } }
+  startStage(now) {
+    const st = this.st;
+    this.stageXp = 0; this.newBadges = [];
+    this.Q = Array.from({ length: st.w * st.h }, () => [0, 0, 0, 0]);
+    this.eps = st.eps; this.episode = 0; this.praise = 0; this.scold = 0; this.epPraise = 0; this.epScold = 0;
+    this.lastFlash = null; this.evalResult = null;
+    this.resetDog(now);
+    this.setState(S.INTRO, now);
+  }
+  resetDog(now) {
+    this.pos = [...this.st.start]; this.prevPos = [...this.pos]; this.steps = 0; this.episode++;
+    this.epPraise = 0; this.epScold = 0; this.phase = "act"; this.tPhase = now; this.mood = 0; this.moodUntil = 0;
+    this.trail = [[...this.pos]];
+  }
+  idx(p) { return p[1] * this.st.w + p[0]; }
+  isPuddle(p) { return this.st.puddles.some(q => same(p, q)); }
+  terminal(p) { return same(p, this.st.bone) || same(p, this.st.ball); }
+  move(p, a) {
+    const n = [p[0] + ACTIONS[a][0], p[1] + ACTIONS[a][1]];
+    return n[0] < 0 || n[1] < 0 || n[0] >= this.st.w || n[1] >= this.st.h ? [...p] : n;
+  }
+  bestActions(p) { const q = this.Q[this.idx(p)], m = Math.max(...q); return q.map((v, i) => [v, i]).filter(([v]) => v > m - 1e-6).map(([, i]) => i); }
+  choose(p) {
+    if (Math.random() < this.eps) return Math.floor(Math.random() * 4);
+    const b = this.bestActions(p); return b[Math.floor(Math.random() * b.length)];
+  }
+  stepTime() { return 1.0 / this.speed; }
+
+  // 사람이 주는 보상 (현재 보상 창이 열려 있을 때만)
+  feedback(r, now) {
+    if (this.state !== S.RUN || this.phase !== "window" || this.windowReward !== 0) return;
+    this.windowReward = r;
+    if (r > 0) { this.praise++; this.epPraise++; } else { this.scold++; this.epScold++; }
+    this.mood = r; this.moodUntil = now + 0.8;
+    this.lastFlash = { r, t: now };
+  }
+
+  update(dt, now) {
+    if (this.state !== S.RUN || this.paused) return;
+    const st = this.st;
+    if (this.phase === "act" && now - this.tPhase >= 0.15) {
+      this.a = this.choose(this.pos);
+      this.prevPos = [...this.pos];
+      this.pos = this.move(this.pos, this.a);
+      this.steps++; this.trail.push([...this.pos]); if (this.trail.length > 12) this.trail.shift();
+      this.phase = "window"; this.tPhase = now; this.windowReward = 0;
+      if (this.isPuddle(this.pos)) { this.mood = -1; this.moodUntil = now + 0.8; }
+      if (same(this.pos, st.bone) && st.envBone > 0) { this.mood = 1; this.moodUntil = now + 1.2; }
+    } else if (this.phase === "window" && now - this.tPhase >= this.stepTime()) {
+      // Q-러닝 갱신
+      let r = this.windowReward;
+      if (same(this.pos, st.bone)) r += st.envBone;
+      if (this.isPuddle(this.pos)) r += -2;
+      const s0 = this.idx(this.prevPos), s1 = this.idx(this.pos);
+      const future = this.terminal(this.pos) ? 0 : Math.max(...this.Q[s1]);
+      this.Q[s0][this.a] += ALPHA * (r + GAMMA * future - this.Q[s0][this.a]);
+      if (this.terminal(this.pos) || this.steps >= st.maxSteps) this.endEpisode(now);
+      else { this.phase = "act"; this.tPhase = now; }
+    }
+  }
+  // 혼자 산책 테스트: 탐험 없이 가장 점수가 높은 방향으로만 가 보기
+  evaluate() {
+    const st = this.st; let p = [...st.start], path = [[...p]];
+    for (let i = 0; i < st.maxSteps; i++) {
+      const b = this.bestActions(p);
+      if (b.length !== 1) return { ok: false, why: "헷갈림", path };
+      p = this.move(p, b[0]); path.push([...p]);
+      if (this.isPuddle(p)) return { ok: false, why: "웅덩이", path };
+      const goal = st.ball ? st.ball : st.bone;
+      if (same(p, goal)) return { ok: true, path };
+      if (this.terminal(p)) return { ok: false, why: "다른 곳", path };
+    }
+    return { ok: false, why: "길 잃음", path };
+  }
+  endEpisode(now) {
+    const reached = same(this.pos, this.st.ball || this.st.bone);
+    this.evalResult = this.evaluate();
+    this.log("episode", { ep: this.episode, steps: this.steps, reached, praise: this.epPraise, scold: this.epScold,
+      eps: this.eps, eval: this.evalResult.ok ? "ok" : this.evalResult.why });
+    this.setState(S.EP_END, now);
+  }
+  afterEpisode(now) {
+    if (this.evalResult && this.evalResult.ok) {
+      const used = this.praise + this.scold;
+      this.gain(150 + Math.max(0, 120 - used));
+      const k = this.st;
+      if (this.stageIdx === 0) { this.badge("첫 산책"); if (used <= 25) this.badge("칭찬 장인"); }
+      if (this.stageIdx === 1) this.badge("웅덩이 탈출");
+      if (this.stageIdx === 2) this.badge("보상의 함정");
+      this.log("clear", { episodes: this.episode, praise: this.praise, scold: this.scold, eps: this.eps });
+      this.setState(S.STAGE_END, now);
+    } else { this.resetDog(now); this.setState(S.RUN, now); }
+  }
+  advance(now) {
+    if (this.state === S.INTRO) { this.resetDog(now); this.episode = 1; this.setState(S.RUN, now); }
+    else if (this.state === S.EP_END) this.afterEpisode(now);
+    else if (this.state === S.STAGE_END) {
+      if (this.stageIdx < STAGES.length - 1) { this.stageIdx++; this.startStage(now); } else this.setState(S.FINAL, now);
+    }
+  }
+  canContinue(now) { return now - this.tState > 0.6; }
+  log(event, data) {
+    const row = { time: new Date().toLocaleString("sv-SE"), student_id: this.studentId || "", name: this.studentName || "",
+      condition: this.condition, stage: this.st.name, event, detail: JSON.stringify(data) };
+    this.logs.push(row);
+    sendToSheet({ kind: "log", game: GAME_ID, row: { ...row, nickname: this.nickname || "", room: this.room || "" } });
+  }
+}
+
+// =====================================================================
+// 화면
+// =====================================================================
+const AREA = [40, 130, 810, 705];
+function gridGeom(st) {
+  const cell = Math.floor(Math.min((AREA[2] - AREA[0]) / st.w, (AREA[3] - AREA[1]) / st.h, 150));
+  const gx = AREA[0] + ((AREA[2] - AREA[0]) - cell * st.w) / 2, gy = AREA[1] + ((AREA[3] - AREA[1]) - cell * st.h) / 2;
+  return { cell, gx, gy, c: p => [gx + (p[0] + 0.5) * cell, gy + (p[1] + 0.5) * cell] };
+}
+function drawGrid(g, now) {
+  const st = g.st, G = gridGeom(st), cell = G.cell;
+  const maxAbs = Math.max(0.5, ...g.Q.flat().map(Math.abs));
+  for (let y = 0; y < st.h; y++) for (let x = 0; x < st.w; x++) {
+    const p = [x, y], X = G.gx + x * cell, Y = G.gy + y * cell, q = g.Q[g.idx(p)], m = Math.max(...q);
+    const tint = m > 0 ? `rgba(31,163,90,${0.08 + 0.3 * Math.min(1, m / maxAbs)})` : "rgba(255,255,255,0.85)";
+    panel(X + 3, Y + 3, X + cell - 3, Y + cell - 3, { fill: g.isPuddle(p) ? "#cfe6ff" : tint, r: 10, stroke: "rgba(0,0,0,0.08)" });
+    if (g.isPuddle(p)) { ctx.beginPath(); ctx.ellipse(X + cell / 2, Y + cell / 2 + 10, cell * 0.32, cell * 0.16, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#7fb8f0"; ctx.fill(); text("웅덩이", X + cell / 2, Y + 18, { size: 13, color: C.BLUE }); }
+    // Q값 화살표: 초록 = 좋다, 빨강 = 나쁘다, 진할수록 확신
+    if (!g.terminal(p)) ACTIONS.forEach(([dx, dy], a) => {
+      const v = q[a]; if (Math.abs(v) < 0.02) return;
+      const cx = X + cell / 2 + dx * cell * 0.3, cy = Y + cell / 2 + dy * cell * 0.3, s = cell * 0.11;
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(Math.atan2(dy, dx));
+      ctx.beginPath(); ctx.moveTo(s, 0); ctx.lineTo(-s * 0.7, -s * 0.8); ctx.lineTo(-s * 0.7, s * 0.8); ctx.closePath();
+      const al = 0.25 + 0.75 * Math.min(1, Math.abs(v) / maxAbs);
+      ctx.fillStyle = v > 0 ? `rgba(31,163,90,${al})` : `rgba(226,59,59,${al})`; ctx.fill(); ctx.restore();
+    });
+    if (same(p, st.start)) text("출발", X + 22, Y + 16, { size: 13, color: C.GRAY });
+  }
+  const bc = G.c(st.bone); drawBone(bc[0], bc[1], cell / 90);
+  if (st.ball) { const b = G.c(st.ball); drawBall(b[0], b[1], cell / 90); }
+  // 지나온 길
+  for (let i = 1; i < g.trail.length; i++) seg(G.c(g.trail[i - 1]), G.c(g.trail[i]), `rgba(122,79,214,${0.1 + 0.4 * i / g.trail.length})`, 4);
+  // 강아지 (한 칸 이동 애니메이션)
+  const k = g.phase === "window" ? clamp((now - g.tPhase) / 0.25, 0, 1) : 1;
+  const a = G.c(g.prevPos), b = G.c(g.pos), dp = [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k - Math.sin(k * Math.PI) * 10];
+  drawDog(dp[0], dp[1], cell / 95, now < g.moodUntil ? g.mood : 0, now);
+  // 보상 창: 강아지 위 타이머 링
+  if (g.state === S.RUN && g.phase === "window" && !g.paused) {
+    const prog = clamp((now - g.tPhase) / g.stepTime(), 0, 1);
+    ctx.beginPath(); ctx.arc(b[0], b[1] - cell * 0.42, 12, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * (1 - prog));
+    ctx.strokeStyle = g.windowReward > 0 ? C.GREEN : g.windowReward < 0 ? C.RED : C.PURPLE; ctx.lineWidth = 4; ctx.stroke();
+  }
+  if (g.lastFlash && now - g.lastFlash.t < 0.7) {
+    const t = (now - g.lastFlash.t) / 0.7;
+    text(g.lastFlash.r > 0 ? "👍 +1" : "👎 −1", b[0], b[1] - cell * 0.55 - 30 * t, { size: 28, bold: true, color: g.lastFlash.r > 0 ? C.GREEN : C.RED });
+  }
+  // 혼자 산책 테스트 경로
+  if (g.state === S.EP_END && g.evalResult) {
+    ctx.setLineDash([10, 8]);
+    for (let i = 1; i < g.evalResult.path.length; i++) seg(G.c(g.evalResult.path[i - 1]), G.c(g.evalResult.path[i]), g.evalResult.ok ? C.GREEN : C.ORANGE, 5);
+    ctx.setLineDash([]);
+  }
+}
+function drawSide(g, now) {
+  const x1 = 830, x2 = W - 30;
+  panel(x1, 130, x2, 705, { fill: "rgba(255,255,255,0.95)" });
+  // 카메라 / 제스처 상태
+  const cx1 = x1 + 15, cy1 = 145, cw = x2 - x1 - 30, ch = Math.round(cw * 9 / 16);
+  if (condition === "hand" && video.readyState >= 2) {
+    ctx.save(); rrPath(cx1, cy1, cx1 + cw, cy1 + ch, 10); ctx.clip();
+    ctx.translate(cx1 + cw, cy1); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, cw, ch); ctx.restore();
+    if (hand) for (const [a, b] of HAND_CONN) seg(hand[a].map((v, i) => i ? cy1 + v * ch : cx1 + v * cw), hand[b].map((v, i) => i ? cy1 + v * ch : cx1 + v * cw), "rgba(122,79,214,0.8)", 2);
+    const gv = gesture.value;
+    panel(cx1 + 8, cy1 + ch - 44, cx1 + 200, cy1 + ch - 8, { fill: "rgba(255,255,255,0.92)", r: 10 });
+    text(gv > 0 ? "👍 칭찬!" : gv < 0 ? "👎 꾸중!" : hand ? "✋ 대기 중" : "손이 안 보여요", cx1 + 104, cy1 + ch - 26,
+      { size: 18, bold: true, color: gv > 0 ? C.GREEN : gv < 0 ? C.RED : C.GRAY });
+  } else {
+    button("good", "👍 칭찬 (↑)", cx1, cy1 + 10, cx1 + cw / 2 - 6, cy1 + ch - 10, C.GREEN, false, 24);
+    button("bad", "👎 꾸중 (↓)", cx1 + cw / 2 + 6, cy1 + 10, cx1 + cw, cy1 + ch - 10, C.RED, false, 24);
+  }
+  let y = cy1 + ch + 30;
+  text(`산책 ${g.episode}회째   ·   이번 산책 ${g.steps} / ${g.st.maxSteps}걸음`, x1 + 20, y, { size: 17, align: "left" }); y += 32;
+  text(`👍 ${g.praise}번   👎 ${g.scold}번`, x1 + 20, y, { size: 19, bold: true, align: "left" }); y += 40;
+  // 탐험률
+  text("탐험률 ε (새로운 길 시도)", x1 + 20, y, { size: 16, bold: true, align: "left", color: C.PURPLE }); y += 26;
+  [0, 0.1, 0.25, 0.5].forEach((e, i) => button(`eps_${e}`, `${Math.round(e * 100)}%`, x1 + 20 + i * 92, y, x1 + 102 + i * 92, y + 36, C.PURPLE, Math.abs(g.eps - e) < 1e-6, 16));
+  y += 52;
+  text("속도", x1 + 20, y + 18, { size: 16, bold: true, align: "left", color: C.PURPLE });
+  [[0.5, "느리게"], [1, "보통"], [2, "빠르게"]].forEach(([sp, lab], i) => button(`spd_${sp}`, lab, x1 + 70 + i * 100, y, x1 + 160 + i * 100, y + 36, C.CYAN, g.speed === sp, 16));
+  y += 54;
+  text("화살표: 초록 = 좋은 방향, 빨강 = 나쁜 방향 (진할수록 확신)", x1 + 20, y, { size: 14, align: "left", color: C.GRAY }); y += 22;
+  text(`Q ← Q + ${ALPHA}·[보상 + ${GAMMA}·(다음 칸 최고 Q) − Q]`, x1 + 20, y, { size: 14, align: "left", color: C.GRAY });
+  if (g.paused) text("⏸ 일시정지 (P)", (AREA[0] + AREA[2]) / 2, AREA[1] + 20, { size: 22, bold: true, color: C.ORANGE });
+}
+function drawHud(g) {
+  panel(20, 12, W - 20, 112);
+  const st = g.st;
+  text(st.name, 45, 46, { size: 28, bold: true, align: "left", color: g.stageIdx === 2 ? C.ORANGE : C.GOLD });
+  text(st.title, 45, 84, { size: 20, align: "left" });
+  const msg = g.state === S.RUN ? (g.st.ball ? "⚽ 공으로 가도록 가르치기 (뼈다귀 자동 보상 없음)" : "강아지가 움직일 때마다 1초 안에 👍 또는 👎")
+    : "";
+  if (msg) text(msg, W / 2 + 40, 62, { size: 19, color: C.GRAY });
+  text(`XP ${g.xp}`, W - 300, 46, { size: 28, bold: true, align: "left", color: C.GOLD });
+  text(`${rankOf(g.xp)}   배지 ${g.badges.length}개`, W - 300, 82, { size: 16, align: "left", color: C.GRAY });
+}
+function drawCard(title, lines, color = C.GOLD, foot = "클릭 / SPACE → 계속", yTop = 150, yBot = H - 50) {
+  ctx.fillStyle = "rgba(238,241,246,0.7)"; ctx.fillRect(0, 0, W, H);
+  panel(130, yTop, W - 130, yBot, { fill: "rgba(255,255,255,0.98)", r: 24 });
+  text(title, W / 2, yTop + 48, { size: 36, bold: true, color });
+  lines.forEach(([s, c], i) => text(s, W / 2, yTop + 110 + i * 38, { size: 20, color: c }));
+  if (foot) text(foot, W / 2, yBot - 32, { size: 19, color: C.CYAN });
+}
+function render(g, now) {
+  buttons.length = 0;
+  drawGrid(g, now); drawSide(g, now); drawHud(g);
+  const st = g.st, s = g.state;
+  if (s === S.EP_END) {
+    const r = g.evalResult, reached = same(g.pos, st.ball || st.bone);
+    const [x1, y1, x2] = AREA, cx = (x1 + x2) / 2;
+    panel(cx - 300, y1 + 10, cx + 300, y1 + 120, { fill: "rgba(255,255,255,0.97)", r: 16, stroke: r.ok ? C.GREEN : C.ORANGE, lw: 2 });
+    text(`${g.episode}번째 산책 끝 · ${reached ? (st.ball ? "공 도착!" : "뼈다귀 도착!") : "도착 못 함"}`, cx, y1 + 38, { size: 21, bold: true });
+    text(r.ok ? "🎉 혼자 산책 테스트 성공! 강아지가 길을 배웠어요" :
+      `혼자 산책 테스트: ${{ "헷갈림": "아직 어느 쪽이 좋은지 헷갈려해요", "웅덩이": "웅덩이로 가 버려요", "길 잃음": "길을 잃어요", "다른 곳": "다른 곳으로 가요" }[r.why]}`,
+      cx, y1 + 72, { size: 18, color: r.ok ? C.GREEN : C.ORANGE, bold: true });
+    text("점선 = 탐험 없이 혼자 갔을 때의 길 · 클릭 / SPACE → 계속", cx, y1 + 102, { size: 15, color: C.GRAY });
+  }
+  if (s === S.INTRO) drawCard(`${st.name}:  ${st.title}`, INTRO[g.stageIdx], g.stageIdx === 2 ? C.ORANGE : C.GOLD, "클릭 / SPACE → 산책 시작", 150, H - 140);
+  else if (s === S.STAGE_END) {
+    const lines = [[`산책 ${g.episode}번 만에 훈련 성공 · 👍 ${g.praise}번 👎 ${g.scold}번 · 탐험률 ${Math.round(g.eps * 100)}%`, C.TEXT],
+      [`+${g.stageXp} XP    (누적 ${g.xp} / ${rankOf(g.xp)})`, C.GOLD], ["", C.TEXT]];
+    for (const t of INSIGHT[g.stageIdx]) lines.push([t, C.CYAN]);
+    if (g.newBadges.length) lines.push(["새 배지:  " + g.newBadges.join("  /  "), C.GOLD]);
+    drawCard(`${st.name} 완료!`, lines, C.GOLD, "클릭 / SPACE: 다음      R: 이 단계 다시", 140, H - 40);
+  } else if (s === S.FINAL) {
+    drawCard("훈련 완료! 🐶", [
+      [`XP ${g.xp}  /  ${rankOf(g.xp)}     배지: ${g.badges.join(", ") || "-"}`, C.GOLD], ["", C.TEXT],
+      ["오늘 내가 발견한 것", C.TEXT],
+      ["1. 강화학습은 정답 대신 '보상'으로 배운다.", C.CYAN],
+      ["2. 보상은 뒤로 전해진다: 목표 근처의 좋은 점수가 출발점까지 퍼진다 (Q값).", C.CYAN],
+      ["3. 탐험과 활용의 균형이 학습 속도를 바꾼다.", C.CYAN],
+      ["4. AI는 우리의 '뜻'이 아니라 '보상'을 따른다. 보상 설계가 중요하다.", C.CYAN]],
+      C.GOLD, "R: 처음부터 다시      'CSV 저장' 버튼으로 기록 내려받기", 140, H - 40);
+  }
+}
+
+// =====================================================================
+// 실행
+// =====================================================================
+const video = document.getElementById("v");
+let game = null, condition = "mouse", landmarker = null, hand = null, lastVideoTime = -1, prev = null;
+const gesture = new GestureFilter();
+const mouse = { pos: null, click: null };
+
+function canvasPoint(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; }
+canvas.addEventListener("pointermove", e => { mouse.pos = canvasPoint(e); });
+canvas.addEventListener("pointerdown", e => { mouse.pos = canvasPoint(e); mouse.click = mouse.pos; });
+window.addEventListener("keydown", e => {
+  if (!game) return;
+  const now = performance.now() / 1000;
+  if (e.key === "ArrowUp") { e.preventDefault(); game.feedback(1, now); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); game.feedback(-1, now); }
+  else if (e.key === " ") { e.preventDefault(); if (game.canContinue(now)) game.advance(now); }
+  else if (e.key === "p" || e.key === "P") game.paused = !game.paused;
+  else if (e.key === "r" || e.key === "R") {
+    if (game.state === S.FINAL) { game.xp = 0; game.badges = []; game.stageIdx = 0; }
+    game.startStage(now);
+  }
+});
+function handleClick(p, now) {
+  const b = buttons.find(b => p[0] >= b.x1 && p[0] <= b.x2 && p[1] >= b.y1 && p[1] <= b.y2);
+  if (b) {
+    if (b.id === "good") game.feedback(1, now);
+    else if (b.id === "bad") game.feedback(-1, now);
+    else if (b.id.startsWith("eps_")) { game.eps = +b.id.slice(4); game.log("eps", { eps: game.eps }); }
+    else if (b.id.startsWith("spd_")) game.speed = +b.id.slice(4);
+    return;
+  }
+  if (game.state !== S.RUN && game.canContinue(now)) game.advance(now);
+}
+
+function loop() {
+  const now = performance.now() / 1000;
+  const dt = prev === null ? 0 : Math.min(0.1, now - prev); prev = now;
+  const gr = ctx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "#f7f9fc"); gr.addColorStop(1, "#e3e9f2");
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+  if (game) try {
+    if (condition === "hand" && landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const res = landmarker.detectForVideo(video, performance.now());
+      hand = res.landmarks && res.landmarks.length ? res.landmarks[0].map(l => [1 - l.x, l.y]) : null;
+      const gv = gesture.update(hand ? thumbGesture(hand.map(([x, y]) => [x * 1280, y * 720])) : 0);
+      if (gv !== 0) game.feedback(gv, now);
+    }
+    if (mouse.click) { const p = mouse.click; mouse.click = null; handleClick(p, now); }
+    game.update(dt, now);
+    render(game, now);
+  } catch (e) { console.error(e); }
+  requestAnimationFrame(loop);
+}
+
+async function setupHand(status) {
+  status("카메라를 켜는 중… (권한을 허용해 주세요)");
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" }, audio: false });
+  video.srcObject = stream; await video.play();
+  status("손 인식 모델을 불러오는 중… (처음엔 10초 정도 걸릴 수 있어요)");
+  const { HandLandmarker, FilesetResolver } = await import(`${MP_URL}/vision_bundle.mjs`);
+  const fileset = await FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+  const opts = d => ({ baseOptions: { modelAssetPath: MODEL_URL, delegate: d }, runningMode: "VIDEO", numHands: 1,
+    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+  try { landmarker = await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
+  catch { landmarker = await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
+}
+document.getElementById("go").addEventListener("click", async () => {
+  const btn = document.getElementById("go"), st = document.getElementById("status");
+  const status = m => (st.textContent = m);
+  const studentId = document.getElementById("sid").value.trim();
+  const studentName = document.getElementById("name").value.trim();
+  const player = [studentId, studentName].filter(Boolean).join(" ") || "guest";
+  const nickname = document.getElementById("nick").value.trim() || player;
+  const room = document.getElementById("room").value.trim();
+  try { localStorage.setItem("mtl_info", JSON.stringify({ studentId, studentName, nickname, room })); } catch {}
+  condition = document.getElementById("mode").value;
+  btn.disabled = true;
+  if (condition === "hand") {
+    try { await setupHand(status); }
+    catch (e) { console.error(e); status("웹캠이나 손 인식을 시작하지 못했어요. https 주소인지, 카메라 권한을 허용했는지 확인하세요. (마우스 방식은 바로 가능)"); btn.disabled = false; return; }
+  }
+  document.getElementById("start").style.display = "none";
+  game = new Game({ player, studentId, studentName, nickname, room, condition }, performance.now() / 1000);
+});
+document.getElementById("csv").addEventListener("click", () => {
+  if (!game || !game.logs.length) { alert("아직 저장할 기록이 없어요."); return; }
+  const cols = Object.keys(game.logs[0]);
+  const esc = v => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const csv = "﻿" + [cols.join(","), ...game.logs.map(r => cols.map(c => esc(r[c])).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `dog_log_${game.player}_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+});
+try { const s = JSON.parse(localStorage.getItem("mtl_info") || "{}");
+  if (s.studentId) document.getElementById("sid").value = s.studentId;
+  if (s.studentName) document.getElementById("name").value = s.studentName;
+  if (s.nickname) document.getElementById("nick").value = s.nickname;
+  if (s.room) document.getElementById("room").value = s.room; } catch {}
+window.__dog = { get game() { return game; }, S, thumbGesture };
+setupLeaderboard(GAME_ID, () => ({ room: game ? game.room : document.getElementById("room").value.trim(), nickname: game ? game.nickname : "" }));
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
