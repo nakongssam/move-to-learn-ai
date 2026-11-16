@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>얼굴 특징 설계소: 내가 만드는 AI의 눈</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  얼굴 특징 설계소 (Face Feature Maker)
+  정보 교과: 인공지능 — 특징 설계(feature engineering), 정규화, 강건성(일반화), 사람이 만든 특징 vs 신경망이 찾은 특징
+  AI융합교육대학원 박사과정 김한나
+
+  MediaPipe Face Landmarker가 주는 얼굴 점 좌표 중에서 학생이 직접 점 2개를 골라 '거리'로 특징을 만든다.
+  그 특징으로 놀람/무표정을 학습시키고, 가까이·멀리·고개 돌리기 시험으로 특징이 튼튼한지 확인한다.
+  영상·사진은 저장하지 않고, 점 좌표 숫자만 이 컴퓨터 메모리에서 사용한다.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #eef1f6; overflow: hidden;
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); display: block; touch-action: none; }
+  #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(238, 241, 246, .97); color: #22222a; z-index: 10; }
+  .box { background: #fff; border: 1px solid #dde1ea; border-radius: 20px; padding: 30px 44px;
+    width: min(540px, 88vw); text-align: center; box-shadow: 0 10px 40px rgba(40,50,80,.15); }
+  .box h1 { margin: 0 0 4px; font-size: 30px; }
+  .box .sub { margin: 0 0 18px; color: #7a4fd6; }
+  .box label { display: block; text-align: left; margin: 12px 0 6px; color: #666; font-size: 14px; }
+  .box input, .box select { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: 10px;
+    border: 1px solid #cfd4de; background: #fff; color: #22222a; font-size: 16px; font-family: inherit; }
+  .box button { margin-top: 20px; width: 100%; padding: 13px; border: 0; border-radius: 12px;
+    background: #7a4fd6; color: #fff; font-size: 18px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .box button:disabled { opacity: .5; cursor: wait; }
+  #status { min-height: 22px; margin: 12px 0 0; color: #0b8fcf; font-size: 14px; }
+  .tip { color: #888; font-size: 12.5px; line-height: 1.6; margin: 10px 0 0; }
+  #tools { position: fixed; right: 12px; bottom: 10px; z-index: 5; display: flex; gap: 8px; }
+  #tools button, #tools a { padding: 7px 12px; border-radius: 9px; border: 1px solid #cfd4de; background: rgba(255,255,255,.92);
+    color: #333; font-size: 13px; cursor: pointer; font-family: inherit; text-decoration: none; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="1280" height="720"></canvas></div>
+<video id="v" playsinline muted style="display:none"></video>
+
+<div id="start">
+  <div class="box">
+    <h1>🔧 얼굴 특징 설계소</h1>
+    <p class="sub">내가 만드는 AI의 눈 — 얼굴 점을 골라 특징을 직접 설계하기</p>
+    <div style="display:flex;gap:10px">
+      <div style="width:150px"><label for="sid">학번</label>
+        <input id="sid" placeholder="예: 10701" maxlength="10" inputmode="numeric" autocomplete="off"></div>
+      <div style="flex:1"><label for="name">이름 <span style="color:#999">(기록용 — 순위표엔 안 보여요)</span></label>
+        <input id="name" placeholder="예: 홍길동" maxlength="20" autocomplete="off"></div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <div style="flex:1"><label for="nick">닉네임 <span style="color:#999">(순위표에 표시)</span></label>
+        <input id="nick" placeholder="예: 특징장인" maxlength="12" autocomplete="off"></div>
+      <div style="width:130px"><label for="room">반 코드</label>
+        <input id="room" placeholder="예: 1-7" maxlength="10" autocomplete="off"></div>
+    </div>
+    <label for="mode">입력 방식</label>
+    <select id="mode">
+      <option value="face">얼굴 (웹캠) — 내 얼굴의 점으로 특징 만들기</option>
+      <option value="demo">데모 — 카메라 없이 막대로 움직이는 가상 얼굴</option>
+    </select>
+    <button id="go">시작하기</button>
+    <a href="../" style="display:block;margin-top:12px;color:#7a4fd6;font-size:14px;text-decoration:none">🏠 게임 목록으로</a>
+    <p id="status"></p>
+    <p class="tip">영상과 사진은 저장하지 않아요. 얼굴 점 몇 개의 <b>좌표 숫자</b>만 이 컴퓨터 안에서 사용해요.<br>서버에는 정확도 같은 결과 숫자만 기록돼요.</p>
+  </div>
+</div>
+<div id="tools"><a href="../">🏠 홈</a><button id="csv">기록 CSV 저장</button></div>
+
+<script type="module">
+import { sendToSheet, setupLeaderboard } from "../common/sheet.js?v=3";
+const GAME_ID = "maker";
+
+// =====================================================================
+// 설정
+// =====================================================================
+const MP_VER = "0.10.14";
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const W = 1280, H = 720;
+
+// 학생이 고를 수 있는 얼굴 점 (MediaPipe 478개 중 24개). 좌우는 '내 몸 기준'
+const KP = [
+  { i: 10, n: "이마 위" }, { i: 152, n: "턱 끝" }, { i: 234, n: "오른쪽 볼 끝" }, { i: 454, n: "왼쪽 볼 끝" },
+  { i: 107, n: "오른 눈썹 안쪽" }, { i: 105, n: "오른 눈썹 가운데" }, { i: 336, n: "왼 눈썹 안쪽" }, { i: 334, n: "왼 눈썹 가운데" },
+  { i: 33, n: "오른 눈 바깥" }, { i: 133, n: "오른 눈 안쪽" }, { i: 159, n: "오른 윗눈꺼풀" }, { i: 145, n: "오른 아랫눈꺼풀" },
+  { i: 263, n: "왼 눈 바깥" }, { i: 362, n: "왼 눈 안쪽" }, { i: 386, n: "왼 윗눈꺼풀" }, { i: 374, n: "왼 아랫눈꺼풀" },
+  { i: 168, n: "미간" }, { i: 1, n: "코끝" },
+  { i: 61, n: "오른 입꼬리" }, { i: 291, n: "왼 입꼬리" }, { i: 0, n: "윗입술 위" }, { i: 13, n: "윗입술 안쪽" },
+  { i: 14, n: "아랫입술 안쪽" }, { i: 17, n: "아랫입술 아래" },
+];
+const KPN = Object.fromEntries(KP.map(k => [k.i, k.n]));
+// '자'(기준 길이): 특징 거리를 이것으로 나누면 얼굴 크기의 영향이 사라진다
+const RULERS = [
+  { key: "none", name: "안 나눔", a: null, b: null },
+  { key: "eyes", name: "눈 사이", a: 33, b: 263 },
+  { key: "nose", name: "콧대", a: 168, b: 1 },
+  { key: "face", name: "얼굴 높이", a: 10, b: 152 },
+];
+const A_NAME = "놀람", B_NAME = "무표정";
+const SAMPLES = 10, CAPTURE_TIME = 2.0, COUNTDOWN = 3, TEST_TIME = 2.0, TEST_FRAMES = 10, PASS = 0.8;
+const TESTS = [
+  { name: "가까이 다가가서 무표정", y: -1, how: "카메라에 얼굴을 한 뼘 더 가까이 대고, 무표정!", demo: { dist: 1.0, yaw: 0.5 } },
+  { name: "멀리 떨어져서 놀람", y: 1, how: "의자를 뒤로 빼서 멀어진 채로, 놀란 표정!", demo: { dist: 0.0, yaw: 0.5 } },
+  { name: "고개 돌리고 무표정", y: -1, how: "고개를 옆으로 크게 돌린 채로, 무표정!", demo: { dist: 0.43, yaw: 1.0 } },
+  { name: "고개 돌리고 놀람", y: 1, how: "고개를 반대쪽으로 돌린 채로, 놀란 표정!", demo: { dist: 0.43, yaw: 0.0 } },
+];
+const RANKS = [[0, "견습 설계자"], [200, "특징 설계자"], [350, "비전 엔지니어"], [450, "AI 아키텍트"]];
+const C = { WHITE: "#ffffff", TEXT: "#26262e", GRAY: "#6b6b78", CYAN: "#0b8fcf", GREEN: "#1fa35a", GOLD: "#d99a00",
+  ORANGE: "#e8790c", A: "#e63c3c", B: "#326ec8", RED: "#e23b3b", PURPLE: "#7a4fd6", F2: "#e8790c", RULER: "#1fa35a" };
+const FCOL = [C.PURPLE, C.F2];
+const FONT = '"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",sans-serif';
+const STEPS = ["① 설계", "② 데이터", "③ 학습", "④ 흔들기 시험", "⑤ 비교"];
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+// =====================================================================
+// 그리기 도우미
+// =====================================================================
+function rrPath(x1, y1, x2, y2, r) {
+  r = Math.max(0, Math.min(r, (x2 - x1) / 2, (y2 - y1) / 2));
+  ctx.beginPath(); ctx.moveTo(x1 + r, y1); ctx.arcTo(x2, y1, x2, y2, r); ctx.arcTo(x2, y2, x1, y2, r);
+  ctx.arcTo(x1, y2, x1, y1, r); ctx.arcTo(x1, y1, x2, y1, r); ctx.closePath();
+}
+function panel(x1, y1, x2, y2, { fill = "rgba(255,255,255,0.9)", r = 16, stroke = "rgba(0,0,0,0.12)", lw = 1 } = {}) {
+  rrPath(x1, y1, x2, y2, r); ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+function text(s, x, y, { size = 22, color = C.TEXT, bold = false, align = "center", base = "middle" } = {}) {
+  ctx.font = `${bold ? 700 : 400} ${size}px ${FONT}`; ctx.textAlign = align; ctx.textBaseline = base;
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function circle(x, y, r, fill, stroke, lw = 1) {
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+function seg(a, b, color, lw, dash) {
+  ctx.save(); if (dash) ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = "round"; ctx.stroke(); ctx.restore();
+}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const pct = v => `${Math.round(v * 100)}%`;
+
+const buttons = [];
+function button(id, label, x1, y1, x2, y2, color = C.PURPLE, enabled = true, active = false, size = 18) {
+  const hover = mouse.pos && mouse.pos[0] >= x1 && mouse.pos[0] <= x2 && mouse.pos[1] >= y1 && mouse.pos[1] <= y2;
+  panel(x1, y1, x2, y2, { fill: !enabled ? "#e4e6ec" : active ? color : hover ? color : "#ffffff", r: 12,
+    stroke: enabled ? color : "#cfd4de", lw: 2 });
+  text(label, (x1 + x2) / 2, (y1 + y2) / 2 + 1, { size, bold: true,
+    color: !enabled ? "#9a9aa6" : (active || hover) ? "#fff" : color });
+  if (enabled) buttons.push({ id, x1, y1, x2, y2 });
+}
+
+// =====================================================================
+// 특징 계산: 점 2개 사이 거리 (÷ 자)
+// frame = { P: {점번호: [X, Y]}, bs: [jawOpen, browInnerUp] }  (X, Y는 화면 높이 단위)
+// =====================================================================
+const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+function featVal(frame, fd, ruler) {
+  if (!frame || !fd) return null;
+  let d = dist(frame.P[fd.a], frame.P[fd.b]);
+  const r = RULERS[ruler];
+  if (r.a !== null) d /= Math.max(1e-6, dist(frame.P[r.a], frame.P[r.b]));
+  return d;
+}
+const designVec = (frame, design) => [featVal(frame, design.f[0], design.ruler), featVal(frame, design.f[1], design.ruler)];
+const googleVec = frame => [frame.bs[0], frame.bs[1]];
+
+// 0~1로 맞추기 (학습 데이터의 최솟값~최댓값 기준) — 그래프와 학습을 쉽게 하려고
+function makeScaler(V) {
+  const lo = [0, 1].map(d => Math.min(...V.map(v => v[d]))), hi = [0, 1].map(d => Math.max(...V.map(v => v[d])));
+  return v => v.map((x, d) => (x - lo[d]) / Math.max(1e-6, hi[d] - lo[d]));
+}
+
+// =====================================================================
+// 학습: 로지스틱 회귀 (경사하강법)
+// =====================================================================
+class Logistic {
+  constructor(X, Y) { this.X = X; this.y = Y.map(v => (v > 0 ? 1 : 0)); this.w = [0, 0, 0]; this.iter = 0; this.lr = 3; }
+  step(n = 1) {
+    for (let k = 0; k < n; k++) {
+      const g = [0, 0, 0];
+      this.X.forEach((x, i) => {
+        const e = this.prob(x[0], x[1]) - this.y[i];
+        g[0] += e * x[0]; g[1] += e * x[1]; g[2] += e;
+      });
+      const m = this.X.length || 1;
+      this.w = this.w.map((v, d) => v - this.lr * g[d] / m);
+      this.iter++;
+    }
+  }
+  prob(x, y) { return 1 / (1 + Math.exp(-(this.w[0] * x + this.w[1] * y + this.w[2]))); }
+  acc(X = this.X, Y = this.y) { return X.length ? X.filter((x, i) => (this.prob(x[0], x[1]) >= 0.5 ? 1 : 0) === Y[i]).length / X.length : 0; }
+}
+
+// 설계(특징 2개 + 자) → 학습 → 시험 채점까지 한 번에
+function evaluate(samples, tests, vecFn) {
+  const raw = samples.map(s => vecFn(s.frame)), scale = makeScaler(raw);
+  const X = raw.map(scale), Y = samples.map(s => s.y);
+  const m = new Logistic(X, Y); m.step(800);
+  const testRes = tests.map((t, k) => {
+    if (!t || !t.frames.length) return null;
+    const TX = t.frames.map(fr => scale(vecFn(fr)));
+    const ok = TX.map(v => (m.prob(v[0], v[1]) >= 0.5 ? 1 : -1) === TESTS[k].y);
+    return { rate: ok.filter(Boolean).length / ok.length, pts: TX.map((v, i) => ({ v, ok: ok[i] })) };
+  });
+  return { model: m, scale, X, Y, acc: m.acc(), tests: testRes, pass: testRes.filter(r => r && r.rate >= PASS).length };
+}
+
+// =====================================================================
+// 데모 얼굴: 3차원 얼굴 틀 + 표정 + 거리(크기) + 고개 돌리기 → 점 좌표
+// =====================================================================
+const TEMPLATE = {   // [x(내 오른쪽이 -), y(아래 +), z(앞 +)] 얼굴 단위
+  10: [0, -1.0, 0.15], 152: [0, 1.05, 0.1], 234: [-0.8, 0.05, -0.3], 454: [0.8, 0.05, -0.3],
+  107: [-0.12, -0.45, 0.1], 105: [-0.3, -0.48, 0.08], 336: [0.12, -0.45, 0.1], 334: [0.3, -0.48, 0.08],
+  33: [-0.42, -0.28, 0], 133: [-0.14, -0.27, 0.02], 159: [-0.28, -0.33, 0.05], 145: [-0.28, -0.23, 0.05],
+  263: [0.42, -0.28, 0], 362: [0.14, -0.27, 0.02], 386: [0.28, -0.33, 0.05], 374: [0.28, -0.23, 0.05],
+  168: [0, -0.3, 0.12], 1: [0, 0.08, 0.35],
+  61: [-0.22, 0.42, 0.12], 291: [0.22, 0.42, 0.12], 0: [0, 0.33, 0.2], 13: [0, 0.4, 0.2], 14: [0, 0.42, 0.2], 17: [0, 0.52, 0.18],
+};
+const DEMO_SL = [
+  { key: "jaw", name: "입 벌림" }, { key: "brow", name: "눈썹 올림" }, { key: "smile", name: "미소" },
+  { key: "blink", name: "눈 감기" }, { key: "dist", name: "거리 (멀리↔가까이)" }, { key: "yaw", name: "고개 돌리기" },
+];
+const demoVals = { jaw: 0.03, brow: 0.05, smile: 0.05, blink: 0.05, dist: 0.43, yaw: 0.5 };
+const PRESET = { [A_NAME]: { jaw: 0.75, brow: 0.85, smile: 0.0, blink: 0.0 }, [B_NAME]: { jaw: 0.03, brow: 0.05, smile: 0.05, blink: 0.05 } };
+const DEMO_VW = 4 / 3;   // 데모 '화면' 가로 (높이 1 기준)
+const nz = s => (Math.random() - 0.5) * 2 * s;
+
+function synthFrame(p) {
+  const P = {}, scale = 0.55 + p.dist * 1.05, th = (p.yaw - 0.5) * Math.PI / 2, k = 0.28 * scale;
+  for (const [idx, t] of Object.entries(TEMPLATE)) {
+    let [x, y, z] = t; const i = +idx;
+    if (i === 14) y += 0.28 * p.jaw; if (i === 17) y += 0.3 * p.jaw; if (i === 152) y += 0.25 * p.jaw;
+    if (i === 61 || i === 291) { x *= 1 - 0.15 * p.jaw + 0.25 * p.smile; y += 0.1 * p.jaw - 0.06 * p.smile; }
+    if (i === 105 || i === 334) y -= 0.12 * p.brow; if (i === 107 || i === 336) y -= 0.1 * p.brow;
+    if (i === 159 || i === 386) y += -0.02 * p.brow + 0.09 * p.blink;
+    const xr = x * Math.cos(th) + z * Math.sin(th);
+    P[i] = [DEMO_VW / 2 + xr * k + nz(0.0008), 0.5 + y * k + nz(0.0008)];
+  }
+  return { P, bs: [clamp(p.jaw + nz(0.03), 0, 1), clamp(p.brow + nz(0.03), 0, 1)] };
+}
+function setDemo(expr, jitter = 0, extra = {}) {
+  for (const [k, v] of Object.entries(PRESET[expr])) demoVals[k] = clamp(v + nz(jitter), 0, 1);
+  Object.assign(demoVals, extra);
+}
+
+// =====================================================================
+// 게임
+// =====================================================================
+const S = { INTRO: 1, DESIGN: 2, READY: 3, CAPTURE: 4, TRAIN: 5, TEST_INTRO: 6, TEST_READY: 7, TEST_RUN: 8, RESULT: 9, COMPARE: 10, FINAL: 11 };
+const rankOf = xp => { let n = RANKS[0][1]; for (const [need, nm] of RANKS) if (xp >= need) n = nm; return n; };
+
+class Game {
+  constructor(info, now) {
+    Object.assign(this, info);
+    this.logs = []; this.reset(now);
+  }
+  reset(now) {
+    this.xp = 0; this.badges = [];
+    this.design = { f: [null, null], ruler: 0 }; this.slot = 0; this.pick = null; this.frozen = null;
+    this.samples = []; this.tests = TESTS.map(() => null); this.testIdx = 0;
+    this.res = null; this.prevRes = null; this.redesigns = 0; this.firstPass = null; this.liveMax = [1e-6, 1e-6];
+    this.setState(S.INTRO, now);
+  }
+  setState(s, now) {
+    this.state = s; this.tState = now;
+    if (s === S.FINAL)
+      sendToSheet({ kind: "score", game: GAME_ID, room: this.room || "", nickname: this.nickname || this.player,
+        player: this.player, student_id: this.studentId || "", name: this.studentName || "",
+        condition: this.condition, stage: "완료", xp: this.xp });
+  }
+  get step() {
+    const s = this.state;
+    if (s <= S.DESIGN) return 0; if (s <= S.CAPTURE) return 1; if (s === S.TRAIN) return 2;
+    if (s <= S.RESULT) return 3; return 4;
+  }
+  canContinue(now) { return now - this.tState > 0.5; }
+  designReady() { const [a, b] = this.design.f; return a && b && !(a.a === b.a && a.b === b.b) && !(a.a === b.b && a.b === b.a); }
+  designText() {
+    return this.design.f.map((fd, k) => fd ? `F${k + 1}=${KPN[fd.a]}↔${KPN[fd.b]}` : `F${k + 1}=?`).join(", ") + `, 자=${RULERS[this.design.ruler].name}`;
+  }
+  // ----- 설계 -----
+  clickPoint(i) {
+    if (this.state !== S.DESIGN) return;
+    if (this.pick === null) { this.pick = i; return; }
+    if (this.pick === i) { this.pick = null; return; }
+    this.design.f[this.slot] = { a: this.pick, b: i }; this.pick = null; this.liveMax[this.slot] = 1e-6;
+    if (!this.design.f[1 - this.slot]) this.slot = 1 - this.slot;
+  }
+  selectSlot(k) { this.slot = k; this.pick = null; }
+  clearSlot(k) { this.design.f[k] = null; this.slot = k; this.pick = null; }
+  setRuler(r) { this.design.ruler = r; this.liveMax = [1e-6, 1e-6]; }
+  confirmDesign(now) {
+    if (!this.designReady()) return;
+    this.log("design", { design: this.designText(), f: this.design.f, ruler: RULERS[this.design.ruler].key, redesign: this.redesigns });
+    this.frozen = null;
+    if (this.res) {   // 다시 설계: 같은 데이터·같은 시험 장면으로 즉시 재학습·재채점
+      this.prevRes = this.res; this.redesigns++;
+      this.res = evaluate(this.samples, this.tests, f => designVec(f, this.design));
+      this.log("rescore", { design: this.designText(), acc: +this.res.acc.toFixed(3), pass: this.res.pass,
+        rates: this.res.tests.map(t => t && +t.rate.toFixed(2)) });
+      this.setState(S.RESULT, now);
+    } else this.setState(S.READY, now);
+  }
+  // ----- 데이터 모으기 -----
+  startCapture(cls, now) { this.capClass = cls; this.capStart = now; this.capCount = 0; this.setState(S.CAPTURE, now); }
+  // ----- 시험 -----
+  startTest(now) { this.runStart = now; this.runFrames = []; this.setState(S.TEST_RUN, now); }
+
+  advance(now) {
+    switch (this.state) {
+      case S.INTRO: this.setState(S.DESIGN, now); break;
+      case S.READY: this.startCapture(1, now); break;
+      case S.TEST_INTRO: this.testIdx = 0; this.setState(S.TEST_READY, now); break;
+      case S.TEST_READY: this.startTest(now); break;
+      case S.COMPARE: this.finish(now); break;
+    }
+  }
+  update(dt, now, fr) {
+    const s = this.state;
+    if (s === S.DESIGN && fr) this.design.f.forEach((fd, k) => { const v = featVal(fr, fd, this.design.ruler); if (v !== null) this.liveMax[k] = Math.max(this.liveMax[k], v); });
+    if (s === S.CAPTURE) {
+      const t = now - this.capStart - COUNTDOWN;
+      if (condition === "demo" && t < 0) setDemo(this.capClass > 0 ? A_NAME : B_NAME, 0, { dist: 0.43, yaw: 0.5 });
+      if (t >= 0 && fr) {
+        const want = Math.min(SAMPLES, Math.floor(t / (CAPTURE_TIME / SAMPLES)) + 1);
+        if (this.capCount < want) {
+          this.samples.push({ frame: fr, y: this.capClass }); this.capCount++;
+          if (condition === "demo") setDemo(this.capClass > 0 ? A_NAME : B_NAME, 0.12, { dist: 0.43 + nz(0.04), yaw: 0.5 + nz(0.04) });
+        }
+        if (this.capCount >= SAMPLES) {
+          if (this.capClass > 0) this.startCapture(-1, now);
+          else {
+            const raw = this.samples.map(p => designVec(p.frame, this.design)); this.scale = makeScaler(raw);
+            this.model = new Logistic(raw.map(this.scale), this.samples.map(p => p.y)); this.setState(S.TRAIN, now);
+          }
+        }
+      }
+    }
+    if (s === S.TRAIN) {
+      this.model.step(10);
+      if (this.model.iter >= 800 && now - this.tState > 1.5) {
+        this.res = evaluate(this.samples, this.tests, f => designVec(f, this.design));
+        this.log("train", { design: this.designText(), acc: +this.res.acc.toFixed(3), w: this.res.model.w.map(v => +v.toFixed(3)) });
+        this.setState(S.TEST_INTRO, now);
+      }
+    }
+    if (s === S.TEST_RUN) {
+      const t = now - this.runStart - COUNTDOWN, T = TESTS[this.testIdx];
+      if (condition === "demo" && t < 0) setDemo(T.y > 0 ? A_NAME : B_NAME, 0, T.demo);
+      if (t >= 0 && fr) {
+        const want = Math.min(TEST_FRAMES, Math.floor(t / (TEST_TIME / TEST_FRAMES)) + 1);
+        if (this.runFrames.length < want) {
+          this.runFrames.push(fr);
+          if (condition === "demo") setDemo(T.y > 0 ? A_NAME : B_NAME, 0.06, T.demo);
+        }
+        if (this.runFrames.length >= TEST_FRAMES) {
+          this.tests[this.testIdx] = { frames: this.runFrames };
+          if (this.testIdx < TESTS.length - 1) { this.testIdx++; this.setState(S.TEST_READY, now); }
+          else {
+            this.res = evaluate(this.samples, this.tests, f => designVec(f, this.design));
+            this.firstPass = this.res.pass;
+            this.log("test", { design: this.designText(), acc: +this.res.acc.toFixed(3), pass: this.res.pass,
+              rates: this.res.tests.map(t => t && +t.rate.toFixed(2)) });
+            if (condition === "demo") Object.assign(demoVals, { dist: 0.43, yaw: 0.5 });
+            this.setState(S.RESULT, now);
+          }
+        }
+      }
+    }
+  }
+  redesign(now) { this.setState(S.DESIGN, now); }
+  toCompare(now) {
+    this.google = evaluate(this.samples, this.tests, googleVec);
+    this.log("compare", { mine: { acc: +this.res.acc.toFixed(3), pass: this.res.pass },
+      google: { acc: +this.google.acc.toFixed(3), pass: this.google.pass } });
+    this.setState(S.COMPARE, now);
+  }
+  finish(now) {
+    const r = this.res;
+    this.xp = Math.round(r.acc * 100) + r.pass * 60 + (r.pass === TESTS.length ? 100 : 0);
+    this.badges = [];
+    if (r.acc >= 0.9) this.badges.push("특징 설계자");
+    if (r.pass === TESTS.length) this.badges.push("튼튼한 특징");
+    if (this.redesigns > 0 && r.pass > this.firstPass) this.badges.push("끈기 있는 엔지니어");
+    if (r.pass > this.google.pass || (r.pass === this.google.pass && r.acc > this.google.acc)) this.badges.push("구글을 이긴 눈");
+    this.log("finish", { design: this.designText(), acc: +r.acc.toFixed(3), pass: r.pass, redesigns: this.redesigns, xp: this.xp, badges: this.badges });
+    this.setState(S.FINAL, now);
+  }
+  log(event, data) {
+    const row = { time: new Date().toLocaleString("sv-SE"), student_id: this.studentId || "", name: this.studentName || "",
+      condition: this.condition, stage: STEPS[this.step], event, detail: JSON.stringify(data) };
+    this.logs.push(row);
+    sendToSheet({ kind: "log", game: GAME_ID, row: { ...row, nickname: this.nickname || "", room: this.room || "" } });
+  }
+}
+
+// =====================================================================
+// 화면
+// =====================================================================
+const FACE = [40, 140, 580, 545];             // 얼굴 상자 (4:3)
+const PLOT = [720, 180, 1180, 600];           // 특징 공간 그래프 (값 범위 -0.3 ~ 1.3)
+const PMIN = -0.3, PMAX = 1.3;
+const toPlot = (u, v) => [PLOT[0] + (clamp(u, PMIN, PMAX) - PMIN) / (PMAX - PMIN) * (PLOT[2] - PLOT[0]),
+  PLOT[3] - (clamp(v, PMIN, PMAX) - PMIN) / (PMAX - PMIN) * (PLOT[3] - PLOT[1])];
+let dotPos = [];   // 화면에 그려진 점 위치 (클릭 판정용)
+
+function toFace(X, Y) {   // 점 좌표 → 얼굴 상자 위치 (거울처럼 좌우 반전)
+  const [x1, y1, x2, y2] = FACE, w = x2 - x1, h = y2 - y1;
+  const Z = 1.5, cr = condition === "face" && camCrop ? camCrop : { sx: (DEMO_VW - DEMO_VW / Z) / 2, sy: (1 - 1 / Z) / 2, sw: DEMO_VW / Z, sh: 1 / Z, vh: 1 };   // 데모는 1.5배 확대
+  const u = (X * cr.vh - cr.sx) / cr.sw * w, v = (Y * cr.vh - cr.sy) / cr.sh * h;
+  return [x2 - u, y1 + v];
+}
+function drawFace(g, fr) {
+  const [x1, y1, x2, y2] = FACE, w = x2 - x1, h = y2 - y1;
+  panel(x1 - 6, y1 - 6, x2 + 6, y2 + 6, { fill: "#fff", r: 14 });
+  const frozen = g.state === S.DESIGN && g.frozen;
+  const shown = frozen ? g.frozen.frame : fr;
+  ctx.save(); rrPath(x1, y1, x2, y2, 10); ctx.clip();
+  if (condition === "face" && video.readyState >= 2) {
+    const vw = video.videoWidth, vh = video.videoHeight, ar = w / h;
+    let sw = vw, sh = vw / ar; if (sh > vh) { sh = vh; sw = vh * ar; }
+    camCrop = { sx: (vw - sw) / 2, sy: (vh - sh) / 2, sw, sh, vh };
+    if (frozen) ctx.drawImage(g.frozen.img, x1, y1, w, h);
+    else { ctx.translate(x2, y1); ctx.scale(-1, 1); ctx.drawImage(video, camCrop.sx, camCrop.sy, sw, sh, 0, 0, w, h); ctx.setTransform(1, 0, 0, 1, 0, 0); }
+    ctx.fillStyle = "rgba(255,255,255,0.25)"; ctx.fillRect(x1, y1, w, h);
+  } else { ctx.fillStyle = "#f6f3ee"; ctx.fillRect(x1, y1, w, h); if (shown) drawCartoon(shown); }
+  dotPos = [];
+  if (!shown) { ctx.restore(); text("얼굴이 보이지 않아요", (x1 + x2) / 2, (y1 + y2) / 2, { size: 22, bold: true, color: C.RED }); return; }
+  const P = i => toFace(...shown.P[i]);
+  // 자(기준 길이)
+  const r = RULERS[g.design.ruler];
+  if (r.a !== null) { seg(P(r.a), P(r.b), C.RULER, 3, [8, 6]); }
+  // 특징 선
+  g.design.f.forEach((fd, k) => { if (fd) seg(P(fd.a), P(fd.b), FCOL[k], 5); });
+  text("보라 선 = F1   주황 선 = F2   초록 점선 = 자", x1 + 12, y2 - 16, { size: 14, align: "left", color: C.GRAY });
+  // 점
+  const designing = g.state === S.DESIGN;
+  let hover = null;
+  for (const k of KP) {
+    const [px, py] = P(k.i);
+    dotPos.push({ i: k.i, x: px, y: py });
+    const near = mouse.pos && Math.hypot(mouse.pos[0] - px, mouse.pos[1] - py) < 14;
+    if (near && designing) hover = k;
+    const isPick = g.pick === k.i;
+    circle(px, py, designing ? (near || isPick ? 9 : 6) : 4, isPick ? C.GOLD : "#ffffff", isPick ? C.GOLD : C.PURPLE, 2.5);
+  }
+  if (g.pick !== null && designing && mouse.pos && mouse.pos[0] < x2 + 20) seg(P(g.pick), mouse.pos, FCOL[g.slot], 2, [5, 5]);
+  if (hover) {
+    const [px, py] = P(hover.i), tw = 20 + hover.n.length * 16;
+    panel(px + 12, py - 34, px + 12 + tw, py - 6, { fill: "rgba(38,38,46,0.88)", r: 8, stroke: null });
+    text(hover.n, px + 12 + tw / 2, py - 20, { size: 15, bold: true, color: "#fff" });
+  }
+  ctx.restore();
+  if (frozen) text("📸 멈춘 사진 (막대 값은 실시간)", x1 + 12, y1 + 18, { size: 14, align: "left", color: C.GRAY });
+}
+function drawCartoon(fr) {   // 데모 얼굴: 점 좌표로 그리기
+  const P = i => toFace(...fr.P[i]);
+  const top = P(10), chin = P(152), l = P(234), r = P(454);
+  ctx.beginPath(); ctx.ellipse((l[0] + r[0]) / 2, (top[1] + chin[1]) / 2, Math.abs(r[0] - l[0]) / 2 + 4, (chin[1] - top[1]) / 2 + 6, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffe2c4"; ctx.fill(); ctx.strokeStyle = "#e0b48a"; ctx.lineWidth = 3; ctx.stroke();
+  const poly = (ids, fill, stroke, lw = 3) => { ctx.beginPath(); ids.forEach((id, j) => { const p = P(id); j ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); });
+    ctx.closePath(); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); } };
+  poly([33, 159, 133, 145], "#fff", "#555", 2); poly([263, 386, 362, 374], "#fff", "#555", 2);
+  for (const [a, b] of [[159, 145], [386, 374]]) { const p = P(a), q = P(b); circle((p[0] + q[0]) / 2, (p[1] + q[1]) / 2, Math.max(1, Math.min(7, (q[1] - p[1]) / 2)), "#333"); }
+  seg(P(107), P(105), "#5a3d2b", 7); seg(P(336), P(334), "#5a3d2b", 7);
+  seg(P(168), P(1), "#d9a57c", 4);
+  poly([61, 0, 291, 17], "#b8434c", null); poly([61, 13, 291, 14], "#5a1f25", null);
+}
+function drawDemoSliders() {
+  DEMO_SL.forEach((s, i) => {
+    const col = i % 2, row = Math.floor(i / 2), x = 40 + col * 275, y = 572 + row * 42;
+    text(s.name, x, y, { size: 14, align: "left", color: C.GRAY });
+    panel(x, y + 12, x + 250, y + 22, { fill: "#e4e6ec", r: 5, stroke: null });
+    panel(x, y + 12, x + Math.max(10, 250 * demoVals[s.key]), y + 22, { fill: i >= 4 ? C.RULER : C.CYAN, r: 5, stroke: null });
+    circle(x + 250 * demoVals[s.key], y + 17, 9, "#fff", i >= 4 ? C.RULER : C.CYAN, 3);
+  });
+}
+function demoDrag(p) {
+  if (condition !== "demo" || !p || !game || ![S.DESIGN, S.READY].includes(game.state)) return false;
+  for (let i = 0; i < DEMO_SL.length; i++) {
+    const col = i % 2, row = Math.floor(i / 2), x = 40 + col * 275, y = 572 + row * 42;
+    if (p[0] >= x - 12 && p[0] <= x + 262 && p[1] >= y + 2 && p[1] <= y + 32) { mouse.slider = i; demoVals[DEMO_SL[i].key] = clamp((p[0] - x) / 250, 0, 1); return true; }
+  }
+  return false;
+}
+
+function drawDesignPanel(g, fr) {
+  const x1 = 620, x2 = W - 30;
+  panel(x1, 130, x2, 700, { fill: "rgba(255,255,255,0.96)", r: 16 });
+  text("특징 설계도", x1 + 24, 160, { size: 24, bold: true, align: "left", color: C.PURPLE });
+  text(`목표: AI가 '${A_NAME}'과 '${B_NAME}'을 구분하게 해 주는 특징 2개 만들기`, x1 + 24, 194, { size: 16, align: "left", color: C.GRAY });
+  g.design.f.forEach((fd, k) => {
+    const y = 218 + k * 112, act = g.slot === k;
+    panel(x1 + 20, y, x2 - 20, y + 98, { fill: act ? "#f6f1ff" : "#f7f8fb", r: 12, stroke: act ? FCOL[k] : "#e1e4ea", lw: act ? 3 : 1 });
+    buttons.push({ id: `slot${k}`, x1: x1 + 20, y1: y, x2: x2 - 150, y2: y + 98 });
+    text(`F${k + 1}`, x1 + 40, y + 30, { size: 24, bold: true, align: "left", color: FCOL[k] });
+    if (fd) {
+      text(`${KPN[fd.a]}  ↔  ${KPN[fd.b]}`, x1 + 90, y + 30, { size: 18, bold: true, align: "left" });
+      const v = fr ? featVal(fr, fd, g.design.ruler) : null, bw = x2 - x1 - 260;
+      panel(x1 + 40, y + 60, x1 + 40 + bw, y + 76, { fill: "#e4e6ec", r: 8, stroke: null });
+      if (v !== null) {
+        panel(x1 + 40, y + 60, x1 + 40 + Math.max(16, bw * clamp(v / g.liveMax[k], 0, 1)), y + 76, { fill: FCOL[k], r: 8, stroke: null });
+        text(v.toFixed(3), x1 + 52 + bw, y + 68, { size: 16, bold: true, align: "left" });
+      }
+      button(`clear${k}`, "다시 고르기", x2 - 140, y + 18, x2 - 34, y + 50, FCOL[k], true, false, 15);
+    } else {
+      const msg = !act ? "여기를 눌러 이 특징 고르기" : g.pick === null ? "← 얼굴에서 첫 번째 점을 클릭하세요" : `'${KPN[g.pick]}' 다음, 두 번째 점을 클릭하세요`;
+      text(msg, x1 + 90, y + 30, { size: 17, align: "left", color: act ? C.TEXT : C.GRAY });
+      text("두 점 사이의 거리가 특징이 돼요", x1 + 90, y + 66, { size: 14, align: "left", color: C.GRAY });
+    }
+  });
+  const ry = 455;
+  text("자(기준 길이)로 나누기", x1 + 24, ry, { size: 18, bold: true, align: "left", color: C.RULER });
+  text("거리 ÷ 자 → 얼굴 크기가 바뀌어도 값이 덜 변해요 (초록 점선)", x1 + 210, ry, { size: 14, align: "left", color: C.GRAY });
+  RULERS.forEach((r, i) => button(`ruler${i}`, r.name, x1 + 24 + i * 145, ry + 20, x1 + 156 + i * 145, ry + 60, C.RULER, true, g.design.ruler === i, 16));
+  text("💡 표정을 바꿔 보세요. 놀랄 때와 무표정일 때 막대가 크게 달라지는 특징이 좋은 특징이에요.", x1 + 24, 560, { size: 14.5, align: "left", color: C.CYAN });
+  if (condition === "face") button("freeze", g.frozen ? "▶ 다시 실시간" : "📸 멈춰서 고르기", x1 + 24, 588, x1 + 220, 628, C.CYAN, true, false, 16);
+  const label = g.res ? "다시 학습하고 채점하기 →" : "이 설계로 데이터 모으기 →";
+  button("confirm", label, x1 + 240, 588, x2 - 24, 680, C.GREEN, g.designReady(), false, 21);
+  if (!g.designReady() && g.design.f[0] && g.design.f[1]) text("두 특징이 같아요!", x1 + 24, 660, { size: 15, align: "left", color: C.RED });
+}
+
+function plotBackground(model) {
+  const [x1, y1, x2, y2] = PLOT, n = 44;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const u = PMIN + (i + 0.5) / n * (PMAX - PMIN), v = PMIN + (j + 0.5) / n * (PMAX - PMIN), p = model.prob(u, v);
+    ctx.fillStyle = p >= 0.5 ? `rgba(230,60,60,${0.05 + 0.16 * (p - 0.5) * 2})` : `rgba(50,110,200,${0.05 + 0.16 * (0.5 - p) * 2})`;
+    const px = x1 + i / n * (x2 - x1), py = y2 - (j + 1) / n * (y2 - y1);
+    ctx.fillRect(px, py, (x2 - x1) / n + 0.5, (y2 - y1) / n + 0.5);
+  }
+  const w = model.w, pts = [];
+  if (Math.abs(w[1]) > 1e-6) for (const u of [PMIN, PMAX]) { const v = -(w[0] * u + w[2]) / w[1]; if (v >= PMIN && v <= PMAX) pts.push([u, v]); }
+  if (Math.abs(w[0]) > 1e-6) for (const v of [PMIN, PMAX]) { const u = -(w[1] * v + w[2]) / w[0]; if (u >= PMIN && u <= PMAX) pts.push([u, v]); }
+  if (pts.length >= 2) seg(toPlot(...pts[0]), toPlot(...pts[pts.length - 1]), "#26262e", 3);
+}
+function drawPlot(g, now, fr, opts = {}) {
+  const [x1, y1, x2, y2] = PLOT;
+  panel(x1 - 60, y1 - 50, x2 + 40, y2 + 70, { fill: "rgba(255,255,255,0.96)", r: 16 });
+  const model = opts.model || (g.state === S.TRAIN ? g.model : g.res && g.res.model);
+  let scale = opts.scale || (g.state === S.TRAIN || !g.res ? g.scale : g.res.scale);
+  if (!scale && g.samples.length >= 2) scale = makeScaler(g.samples.map(p => designVec(p.frame, g.design)));
+  if (model && (g.state !== S.TRAIN || model.iter > 0)) plotBackground(model);
+  // 학습 데이터 범위(0~1) 표시
+  const [a0, b0] = toPlot(0, 1), [a1, b1] = toPlot(1, 0);
+  ctx.save(); ctx.setLineDash([4, 5]); ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.strokeRect(a0, b0, a1 - a0, b1 - b0); ctx.restore();
+  ctx.strokeStyle = "#9aa0ad"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1, y2); ctx.lineTo(x2, y2); ctx.stroke();
+  const vf = opts.vec || (f => designVec(f, g.design));
+  const xl = opts.labels ? opts.labels[0] : `F1: ${g.design.f[0] ? KPN[g.design.f[0].a] + "↔" + KPN[g.design.f[0].b] : "?"}`;
+  const yl = opts.labels ? opts.labels[1] : `F2: ${g.design.f[1] ? KPN[g.design.f[1].a] + "↔" + KPN[g.design.f[1].b] : "?"}`;
+  text(xl, (x1 + x2) / 2, y2 + 24, { size: 15, bold: true, color: opts.labels ? C.TEXT : C.PURPLE });
+  ctx.save(); ctx.translate(x1 - 30, (y1 + y2) / 2); ctx.rotate(-Math.PI / 2);
+  text(yl, 0, 0, { size: 15, bold: true, color: opts.labels ? C.TEXT : C.F2 }); ctx.restore();
+  // 점: 학습 데이터(원), 시험 장면(네모)
+  if (scale) {
+    for (const p of g.samples) { const v = scale(vf(p.frame)); circle(...toPlot(v[0], v[1]), 6, p.y > 0 ? C.A : C.B, "#fff", 2); }
+    const res = opts.res || (g.state === S.RESULT ? g.res : null);
+    if (res) res.tests.forEach((t, k) => t && t.pts.forEach(q => {
+      const [px, py] = toPlot(q.v[0], q.v[1]);
+      ctx.beginPath(); ctx.rect(px - 6, py - 6, 12, 12); ctx.fillStyle = TESTS[k].y > 0 ? C.A : C.B; ctx.fill();
+      ctx.strokeStyle = q.ok ? "#fff" : C.GOLD; ctx.lineWidth = q.ok ? 1.5 : 3; ctx.stroke();
+    }));
+    if (fr && !opts.noLive && g.state !== S.TRAIN) {
+      const v = scale(vf(fr)), [px, py] = toPlot(v[0], v[1]);
+      circle(px, py, 13, "rgba(122,79,214,0.25)", C.PURPLE, 3); circle(px, py, 4, C.PURPLE);
+      if (model) { const p = model.prob(v[0], v[1]), lab = p >= 0.5 ? A_NAME : B_NAME;
+        panel(px + 16, py - 32, px + 160, py - 4, { fill: "rgba(255,255,255,0.96)", r: 10, stroke: p >= 0.5 ? C.A : C.B });
+        text(`AI: ${lab} ${Math.round(Math.max(p, 1 - p) * 100)}%`, px + 88, py - 18, { size: 15, bold: true, color: p >= 0.5 ? C.A : C.B }); }
+    }
+  }
+  circle(x1 + 10, y1 - 28, 6, C.A, "#fff", 2); text(A_NAME, x1 + 22, y1 - 28, { size: 15, align: "left" });
+  circle(x1 + 80, y1 - 28, 6, C.B, "#fff", 2); text(B_NAME, x1 + 92, y1 - 28, { size: 15, align: "left" });
+  text("● 학습 데이터   ■ 시험 장면 (금테 = 틀림)   점선 = 학습 범위", x1 + 170, y1 - 28, { size: 13, align: "left", color: C.GRAY });
+}
+function centerMsg(lines) {
+  const [x1, y1, x2] = PLOT, cx = (x1 + x2) / 2;
+  panel(x1 + 10, y1 + 14, x2 - 10, y1 + 26 + lines.length * 34, { fill: "rgba(255,255,255,0.96)", r: 14, stroke: C.PURPLE });
+  lines.forEach(([s, c, sz], i) => text(s, cx, y1 + 40 + i * 34, { size: sz || 19, bold: i === 0, color: c || C.TEXT }));
+}
+function drawHud(g) {
+  panel(20, 12, W - 20, 112);
+  text("🔧 얼굴 특징 설계소", 45, 46, { size: 26, bold: true, align: "left", color: C.PURPLE });
+  STEPS.forEach((s, i) => text(s, 45 + i * 128, 86, { size: 16, bold: i === g.step, align: "left", color: i === g.step ? C.PURPLE : i < g.step ? C.GREEN : C.GRAY }));
+  const r = g.res;
+  text(r ? `학습 ${pct(r.acc)} · 시험 ${r.tests.some(Boolean) ? r.pass + "/4" : "-"}` : "아직 학습 전", W - 330, 46, { size: 22, bold: true, align: "left", color: C.GOLD });
+  text(`다시 설계 ${g.redesigns}번`, W - 330, 82, { size: 16, align: "left", color: C.GRAY });
+}
+function drawCard(title, lines, color = C.GOLD, foot = "클릭 / SPACE → 계속", yTop = 150, yBot = H - 50) {
+  ctx.fillStyle = "rgba(238,241,246,0.72)"; ctx.fillRect(0, 0, W, H);
+  panel(110, yTop, W - 110, yBot, { fill: "rgba(255,255,255,0.98)", r: 24 });
+  text(title, W / 2, yTop + 46, { size: 34, bold: true, color });
+  lines.forEach(([s, c, b], i) => text(s, W / 2, yTop + 104 + i * 36, { size: 19, color: c, bold: !!b }));
+  if (foot) text(foot, W / 2, yBot - 30, { size: 19, color: C.CYAN });
+}
+function hintFor(g) {
+  const r = g.res, t = r.tests.map(x => x && x.rate >= PASS), ruler = RULERS[g.design.ruler].key;
+  if (r.acc < 0.85) return "학습 정확도부터 낮아요 → 놀랄 때 크게 변하는 점을 골라 보세요 (입, 눈썹 주변).";
+  if ((!t[0] || !t[1]) && ruler === "none") return "가까이 가면 모든 거리가 커지고, 멀어지면 작아져요 → '자'로 나눠 보세요!";
+  if ((!t[2] || !t[3]) && ruler === "eyes") return "고개를 돌리면 '가로' 거리(눈 사이)가 줄어요 → 세로 방향 자를 써 볼까요?";
+  if (!t[2] || !t[3]) return "고개를 돌려도 덜 변하는 방향(세로)의 거리를 특징으로 써 볼까요?";
+  if (r.pass < 4) return "어떤 시험에서 네모가 경계선을 넘어갔는지 그래프에서 확인해 보세요.";
+  return "모든 시험 통과! 어떤 상황에서도 버티는 튼튼한 특징이에요.";
+}
+function drawResult(g, now, fr) {
+  drawPlot(g, now, fr, { noLive: true });
+  const r = g.res, x1 = 40, x2 = 600;
+  panel(x1 - 6, 134, x2, 700, { fill: "rgba(255,255,255,0.97)", r: 16 });
+  text("흔들기 시험 결과", x1 + 14, 164, { size: 24, bold: true, align: "left", color: C.PURPLE });
+  text(g.designText(), x1 + 14, 196, { size: 13.5, align: "left", color: C.GRAY });
+  text(`학습 정확도 ${pct(r.acc)}`, x1 + 14, 230, { size: 19, bold: true, align: "left" });
+  TESTS.forEach((T, k) => {
+    const y = 262 + k * 56, t = r.tests[k], ok = t && t.rate >= PASS;
+    panel(x1 + 10, y, x2 - 16, y + 46, { fill: ok ? "#e9f7ef" : "#fdeeee", r: 10, stroke: ok ? C.GREEN : C.RED });
+    text(ok ? "✔" : "✘", x1 + 32, y + 23, { size: 22, bold: true, color: ok ? C.GREEN : C.RED });
+    text(T.name, x1 + 56, y + 23, { size: 17, align: "left", bold: true });
+    if (t) text(`AI 정답률 ${pct(t.rate)}`, x2 - 30, y + 23, { size: 16, align: "right", color: ok ? C.GREEN : C.RED });
+    if (g.prevRes && g.prevRes.tests[k]) { const was = g.prevRes.tests[k].rate >= PASS; if (was !== ok) text(was ? "↓" : "↑ 개선", x2 - 140, y + 23, { size: 15, bold: true, align: "right", color: was ? C.RED : C.GREEN }); }
+  });
+  text(`통과 ${r.pass} / 4${g.prevRes ? `   (이전 설계: ${g.prevRes.pass} / 4)` : ""}`, x1 + 14, 500, { size: 20, bold: true, align: "left", color: r.pass === 4 ? C.GREEN : C.ORANGE });
+  text("💡 " + hintFor(g), x1 + 14, 534, { size: 14.5, align: "left", color: C.CYAN });
+  button("redesign", "🔧 특징 다시 설계하기", x1 + 10, 566, 316, 620, C.PURPLE);
+  button("finish", "✅ 이 설계로 마치기", 330, 566, x2 - 16, 620, C.GREEN);
+  text("다시 설계하면 같은 데이터·같은 시험 장면으로 바로 다시 채점해요.", x1 + 14, 646, { size: 14, align: "left", color: C.GRAY });
+}
+
+function render(g, now, fr) {
+  buttons.length = 0;
+  const s = g.state;
+  if (s === S.RESULT || s === S.COMPARE || s === S.FINAL) drawResult(g, now, fr);
+  else {
+    drawFace(g, fr);
+    if (condition === "demo") drawDemoSliders();
+    else text("영상은 저장되지 않아요 · 점 좌표 숫자만 사용", 40, 575, { size: 14, align: "left", color: C.GRAY });
+    if (s === S.DESIGN || s === S.INTRO) drawDesignPanel(g, fr);
+    else drawPlot(g, now, fr);
+  }
+  if (s === S.READY) {
+    centerMsg([[`'${A_NAME}' 10장 → '${B_NAME}' 10장을 모아요`, C.PURPLE], ["평소 앉은 자리, 정면을 보고 찍어요."], ["준비되면 버튼 또는 SPACE"]]);
+    button("startcap", "데이터 모으기 시작", 830, 330, 1070, 380, C.A);
+  } else if (s === S.CAPTURE) {
+    const lab = g.capClass > 0 ? A_NAME : B_NAME, col = g.capClass > 0 ? C.A : C.B, t = now - g.capStart;
+    if (t < COUNTDOWN) centerMsg([[`'${lab}' 표정을 지으세요!`, col, 26], [`${Math.ceil(COUNTDOWN - t)}`, col, 40]]);
+    else centerMsg([[`'${lab}' 찍는 중… ${g.capCount} / ${SAMPLES}`, col, 26], ["표정을 조금씩 바꿔 가며 유지하세요"]]);
+  } else if (s === S.TRAIN) {
+    centerMsg([["AI가 학습 중…", C.PURPLE, 24], [`반복 ${g.model.iter}회 · 정확도 ${pct(g.model.acc())}`], ["경계선이 두 무리 사이로 움직여요"]]);
+  } else if (s === S.TEST_READY || s === S.TEST_RUN) {
+    const T = TESTS[g.testIdx], col = T.y > 0 ? C.A : C.B;
+    if (s === S.TEST_READY) {
+      centerMsg([[`시험 ${g.testIdx + 1} / 4: ${T.name}`, col, 23], [T.how], [condition === "demo" ? "데모: 가상 얼굴이 자동으로 움직여요" : "자세를 잡고 버튼 또는 SPACE", C.GRAY, 16]]);
+      button("starttest", "시험 시작", 870, 350, 1030, 398, col);
+    } else {
+      const t = now - g.runStart;
+      if (t < COUNTDOWN) centerMsg([[`${T.name}`, col, 24], [T.how, C.TEXT, 17], [`${Math.ceil(COUNTDOWN - t)}`, col, 38]]);
+      else centerMsg([[`시험 중… ${g.runFrames.length} / ${TEST_FRAMES}`, col, 24], ["자세를 유지하세요!"]]);
+    }
+  }
+  drawHud(g);
+  if (s === S.INTRO) drawCard("🔧 얼굴 특징 설계소", [
+    ["AI는 얼굴을 사진이 아니라 '점 478개의 좌표'로 봐요. 오늘은 이 점으로 특징을 직접 만들어요.", C.TEXT],
+    ["① 점 2개를 고르면 두 점 사이 거리가 특징 하나가 돼요. (예: 윗입술↔아랫입술 = 입 벌림)", C.TEXT],
+    [`② 특징 2개로 '${A_NAME}' vs '${B_NAME}' 데이터를 모아 AI를 학습시켜요.`, C.TEXT],
+    ["③ 흔들기 시험: 가까이 · 멀리 · 고개 돌리기에도 AI가 버틸까요?", C.TEXT],
+    ["④ 구글 AI가 스스로 찾은 특징과 대결!", C.TEXT], ["", C.TEXT],
+    ["목표: 어떤 상황에서도 버티는 '튼튼한 특징' 설계하기", C.GOLD, true]], C.PURPLE, "클릭 / SPACE → 설계 시작", 140, H - 60);
+  else if (s === S.TEST_INTRO) drawCard(`학습 완료! 정확도 ${pct(g.res.acc)}`, [
+    ["그런데 진짜 교실에서는 사람마다 카메라와의 거리도, 고개 방향도 달라요.", C.TEXT],
+    ["학습할 때와 다른 상황에서도 AI가 맞힐까요? 4가지 '흔들기 시험'을 볼게요.", C.TEXT], ["", C.TEXT],
+    ...TESTS.map((T, k) => [`${k + 1}. ${T.name}`, T.y > 0 ? C.A : C.B, true]), ["", C.TEXT],
+    [`시험마다 AI 정답률 ${pct(PASS)} 이상이면 통과!`, C.GOLD, true]], C.GOLD, "클릭 / SPACE → 시험 시작", 140, H - 60);
+  else if (s === S.COMPARE) {
+    const m = g.res, go = g.google;
+    drawCard("사람이 만든 특징 vs AI가 찾은 특징", [
+      [`나의 특징 (${RULERS[g.design.ruler].key === "none" ? "자 없음" : "÷ " + RULERS[g.design.ruler].name}):  학습 ${pct(m.acc)} · 시험 ${m.pass}/4 통과`, C.PURPLE, true],
+      [`구글 AI의 특징 (입 벌림 jawOpen · 눈썹 올림 browInnerUp):  학습 ${pct(go.acc)} · 시험 ${go.pass}/4 통과`, C.TEXT, true], ["", C.TEXT],
+      ["구글의 특징은 사람이 규칙을 짠 게 아니라, 신경망이 수많은 얼굴 데이터에서 '스스로' 찾아낸 거예요.", C.CYAN],
+      ["이것이 딥러닝의 핵심: 특징을 사람이 설계하던 일을 AI가 데이터로 배워요.", C.CYAN], ["", C.TEXT],
+      ["생각해 볼 질문", C.ORANGE, true],
+      ["Q1. 얼굴 점 사이 거리로 '누구인지' 알아내는 기술이 얼굴 인식이에요. 학교 출입문에 쓴다면?", C.TEXT],
+      ["Q2. 이 숫자로 '감정'이나 '집중도'를 판단해도 될까요? 누구에게 불리할 수 있을까요?", C.TEXT]],
+      C.PURPLE, "클릭 / SPACE → 결과 저장하고 마치기", 120, H - 40);
+  } else if (s === S.FINAL) {
+    drawCard("설계 완료!", [
+      [`XP ${g.xp}  /  ${rankOf(g.xp)}     배지: ${g.badges.join(", ") || "-"}`, C.GOLD, true], ["", C.TEXT],
+      ["오늘 내가 발견한 것", C.TEXT, true],
+      ["1. AI에게 얼굴은 점 좌표이고, 특징은 그 숫자를 '어떻게 계산할지' 정하는 설계다.", C.CYAN],
+      ["2. 좋은 특징은 구분하려는 것(표정)엔 민감하고, 상관없는 것(거리·각도)엔 둔감하다.", C.CYAN],
+      ["3. 자(기준 길이)로 나누는 정규화가 특징을 튼튼하게 만든다.", C.CYAN],
+      ["4. 딥러닝은 이런 특징을 데이터에서 스스로 찾는다. 하지만 '무엇을 판단해도 되는가'는 사람이 정한다.", C.CYAN]],
+      C.GOLD, "R: 처음부터 다시      'CSV 저장' 버튼으로 기록 내려받기", 140, H - 60);
+  }
+}
+
+// =====================================================================
+// 실행
+// =====================================================================
+const video = document.getElementById("v");
+let game = null, condition = "demo", landmarker = null, lastVideoTime = -1, prev = null, lastFrame = null, camCrop = null;
+const mouse = { pos: null, click: null, slider: null };
+
+function canvasPoint(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; }
+canvas.addEventListener("pointermove", e => { mouse.pos = canvasPoint(e); if (mouse.slider !== null) demoDrag(mouse.pos); });
+canvas.addEventListener("pointerdown", e => { mouse.pos = canvasPoint(e);
+  if (demoDrag(mouse.pos)) canvas.setPointerCapture(e.pointerId); else mouse.click = mouse.pos; });
+canvas.addEventListener("pointerup", () => { mouse.slider = null; });
+window.addEventListener("keydown", e => {
+  if (!game) return;
+  const now = performance.now() / 1000;
+  if (e.key === " ") { e.preventDefault(); primary(now); }
+  else if (e.key === "Enter" && game.state === S.DESIGN) game.confirmDesign(now);
+  else if ((e.key === "r" || e.key === "R") && game.state === S.FINAL) game.reset(now);
+});
+function primary(now) {
+  const s = game.state;
+  if ([S.INTRO, S.READY, S.TEST_INTRO, S.TEST_READY, S.COMPARE].includes(s) && game.canContinue(now)) game.advance(now);
+}
+function handleClick(p, now) {
+  const g = game;
+  if ([S.INTRO, S.TEST_INTRO, S.COMPARE, S.FINAL].includes(g.state)) { primary(now); return; }
+  if (g.state === S.DESIGN) {   // 얼굴 점 클릭
+    let best = null, bd = 16;
+    for (const d of dotPos) { const dd = Math.hypot(d.x - p[0], d.y - p[1]); if (dd < bd) { bd = dd; best = d; } }
+    if (best) { g.clickPoint(best.i); return; }
+  }
+  const b = buttons.find(b => p[0] >= b.x1 && p[0] <= b.x2 && p[1] >= b.y1 && p[1] <= b.y2);
+  if (!b) { primary(now); return; }
+  if (b.id === "startcap" || b.id === "starttest") g.advance(now);
+  else if (b.id === "confirm") g.confirmDesign(now);
+  else if (b.id === "redesign") g.redesign(now);
+  else if (b.id === "finish") g.toCompare(now);
+  else if (b.id === "freeze") toggleFreeze();
+  else if (b.id.startsWith("clear")) g.clearSlot(+b.id.slice(5));
+  else if (b.id.startsWith("slot")) g.selectSlot(+b.id.slice(4));
+  else if (b.id.startsWith("ruler")) g.setRuler(+b.id.slice(5));
+}
+function toggleFreeze() {
+  if (game.frozen) { game.frozen = null; return; }
+  if (!lastFrame || video.readyState < 2) return;
+  const [x1, y1, x2, y2] = FACE, w = x2 - x1, h = y2 - y1, oc = document.createElement("canvas");
+  oc.width = w; oc.height = h; const o = oc.getContext("2d");
+  o.translate(w, 0); o.scale(-1, 1); o.drawImage(video, camCrop.sx, camCrop.sy, camCrop.sw, camCrop.sh, 0, 0, w, h);
+  game.frozen = { img: oc, frame: lastFrame };   // 화면 표시용으로만 메모리에 잠깐 보관 (저장·전송 안 함)
+}
+
+function readFrame() {
+  if (condition === "demo") return (lastFrame = synthFrame(demoVals));
+  if (!landmarker || video.readyState < 2) return null;
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const res = landmarker.detectForVideo(video, performance.now());
+    const lm = res.faceLandmarks && res.faceLandmarks[0];
+    if (lm) {
+      const ar = video.videoWidth / video.videoHeight, P = {};
+      for (const k of KP) P[k.i] = [lm[k.i].x * ar, lm[k.i].y];
+      const b = {}; if (res.faceBlendshapes && res.faceBlendshapes[0]) for (const c of res.faceBlendshapes[0].categories) b[c.categoryName] = c.score;
+      lastFrame = { P, bs: [b.jawOpen || 0, b.browInnerUp || 0] };
+    } else lastFrame = null;
+  }
+  return lastFrame;
+}
+
+function loop() {
+  const now = performance.now() / 1000;
+  const dt = prev === null ? 0 : Math.min(0.1, now - prev); prev = now;
+  const gr = ctx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "#f7f9fc"); gr.addColorStop(1, "#e3e9f2");
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+  if (game) try {
+    const fr = readFrame();
+    if (mouse.click) { const p = mouse.click; mouse.click = null; handleClick(p, now); }
+    game.update(dt, now, fr);
+    render(game, now, fr);
+  } catch (e) { console.error(e); }
+  requestAnimationFrame(loop);
+}
+
+async function setupFace(status) {
+  status("카메라를 켜는 중… (권한을 허용해 주세요)");
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" }, audio: false });
+  video.srcObject = stream; await video.play();
+  status("얼굴 인식 모델을 불러오는 중… (처음엔 10초 정도 걸릴 수 있어요)");
+  const { FaceLandmarker, FilesetResolver } = await import(`${MP_URL}/vision_bundle.mjs`);
+  const fileset = await FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+  const opts = d => ({ baseOptions: { modelAssetPath: MODEL_URL, delegate: d }, runningMode: "VIDEO", numFaces: 1, outputFaceBlendshapes: true });
+  try { landmarker = await FaceLandmarker.createFromOptions(fileset, opts("GPU")); }
+  catch { landmarker = await FaceLandmarker.createFromOptions(fileset, opts("CPU")); }
+}
+document.getElementById("go").addEventListener("click", async () => {
+  const btn = document.getElementById("go"), st = document.getElementById("status");
+  const status = m => (st.textContent = m);
+  const studentId = document.getElementById("sid").value.trim();
+  const studentName = document.getElementById("name").value.trim();
+  const player = [studentId, studentName].filter(Boolean).join(" ") || "guest";
+  const nickname = document.getElementById("nick").value.trim() || player;
+  const room = document.getElementById("room").value.trim();
+  try { localStorage.setItem("mtl_info", JSON.stringify({ studentId, studentName, nickname, room })); } catch {}
+  condition = document.getElementById("mode").value;
+  btn.disabled = true;
+  if (condition === "face") {
+    try { await setupFace(status); }
+    catch (e) { console.error(e); status("웹캠이나 얼굴 인식을 시작하지 못했어요. https 주소인지, 카메라 권한을 허용했는지 확인하세요. (데모 모드는 바로 가능)"); btn.disabled = false; return; }
+  }
+  document.getElementById("start").style.display = "none";
+  game = new Game({ player, studentId, studentName, nickname, room, condition }, performance.now() / 1000);
+});
+document.getElementById("csv").addEventListener("click", () => {
+  if (!game || !game.logs.length) { alert("아직 저장할 기록이 없어요."); return; }
+  const cols = Object.keys(game.logs[0]);
+  const esc = v => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const csv = "﻿" + [cols.join(","), ...game.logs.map(r => cols.map(c => esc(r[c])).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `maker_log_${game.player}_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+});
+try { const s = JSON.parse(localStorage.getItem("mtl_info") || "{}");
+  if (s.studentId) document.getElementById("sid").value = s.studentId;
+  if (s.studentName) document.getElementById("name").value = s.studentName;
+  if (s.nickname) document.getElementById("nick").value = s.nickname;
+  if (s.room) document.getElementById("room").value = s.room; } catch {}
+window.__maker = { get game() { return game; }, S, demoVals, synthFrame, evaluate, designVec };
+setupLeaderboard(GAME_ID, () => ({ room: game ? game.room : document.getElementById("room").value.trim(), nickname: game ? game.nickname : "" }));
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
